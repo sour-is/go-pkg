@@ -1,0 +1,13 @@
+# Version for this file.
+version: 1
+
+# (Optional) List of env variables used during compilation.
+env:
+  - GO111MODULE=on
+  - CGO_ENABLED=0
+
+# The OS to compile for. `GOOS` env variable will be set to this value.
+goos: linux
+
+# The architecture to compile for. `GOARCH` env variable will be set to this value.
+goarch: amd64
