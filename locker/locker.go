@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2023 Jon Lundy <jon@xuu.cc>
+// SPDX-License-Identifier: BSD-3-Clause
+
 package locker
 
 import (
@@ -10,13 +13,13 @@ import (
 )
 
 type Locked[T any] struct {
-	state chan *T
+	state chan T
 }
 
 // New creates a new locker for the given value.
-func New[T any](initial *T) *Locked[T] {
+func New[T any](initial T) *Locked[T] {
 	s := &Locked[T]{}
-	s.state = make(chan *T, 1)
+	s.state = make(chan T, 1)
 	s.state <- initial
 	return s
 }
@@ -24,7 +27,7 @@ func New[T any](initial *T) *Locked[T] {
 type ctxKey struct{ name string }
 
 // Use will call the function with the locked value
-func (s *Locked[T]) Use(ctx context.Context, fn func(context.Context, *T) error) error {
+func (s *Locked[T]) Use(ctx context.Context, fn func(context.Context, T) error) error {
 	if s == nil {
 		return fmt.Errorf("locker not initialized")
 	}
@@ -61,10 +64,8 @@ func (s *Locked[T]) Use(ctx context.Context, fn func(context.Context, *T) error)
 func (s *Locked[T]) Copy(ctx context.Context) (T, error) {
 	var t T
 
-	err := s.Use(ctx, func(ctx context.Context, c *T) error {
-		if c != nil {
-			t = *c
-		}
+	err := s.Use(ctx, func(ctx context.Context, c T) error {
+		t = c
 		return nil
 	})
 

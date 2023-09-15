@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2023 Jon Lundy <jon@xuu.cc>
+// SPDX-License-Identifier: BSD-3-Clause
+
 package cron
 
 import (
@@ -30,7 +33,7 @@ type state struct {
 }
 type cron struct {
 	jobs        []job
-	state       *locker.Locked[state]
+	state       *locker.Locked[*state]
 	granularity time.Duration
 }
 

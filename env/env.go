@@ -1,7 +1,10 @@
+// SPDX-FileCopyrightText: 2023 Jon Lundy <jon@xuu.cc>
+// SPDX-License-Identifier: BSD-3-Clause
+
 package env
 
 import (
-	"log"
+	"log/slog"
 	"os"
 	"strings"
 )
@@ -10,10 +13,10 @@ func Default(name, defaultValue string) string {
 	name = strings.TrimSpace(name)
 	defaultValue = strings.TrimSpace(defaultValue)
 	if v := strings.TrimSpace(os.Getenv(name)); v != "" {
-		log.Println("# ", name, "=", v)
+		slog.Info("env", name, v)
 		return v
 	}
-	log.Println("# ", name, "=", defaultValue, "(default)")
+	slog.Info("env", name, defaultValue+" (default)")
 	return defaultValue
 }
 
@@ -32,9 +35,9 @@ func Secret(name, defaultValue string) secret {
 	name = strings.TrimSpace(name)
 	defaultValue = strings.TrimSpace(defaultValue)
 	if v := strings.TrimSpace(os.Getenv(name)); v != "" {
-		log.Println("# ", name, "=", secret(v))
+		slog.Info("env", name, secret(v))
 		return secret(v)
 	}
-	log.Println("# ", name, "=", secret(defaultValue), "(default)")
+	slog.Info("env", name, secret(defaultValue).String()+" (default)")
 	return secret(defaultValue)
 }

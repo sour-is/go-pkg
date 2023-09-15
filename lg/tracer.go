@@ -1,9 +1,13 @@
+// SPDX-FileCopyrightText: 2023 Jon Lundy <jon@xuu.cc>
+// SPDX-License-Identifier: BSD-3-Clause
+
 package lg
 
 import (
 	"context"
 	"fmt"
 	"log"
+	"log/slog"
 	"net/http"
 	"runtime"
 	"strconv"
@@ -50,10 +54,51 @@ func attrs(ctx context.Context) (string, []attribute.KeyValue) {
 	return name, attrs
 }
 
+type wrapSpan struct {
+	trace.Span
+}
+
+func (w wrapSpan) AddEvent(name string, options ...trace.EventOption) {
+	w.Span.AddEvent(name, options...)
+
+	cfg := trace.NewEventConfig(options...)
+
+	attrs := cfg.Attributes()
+	args := make([]any, len(attrs)*2)
+
+	for i, a := range attrs {
+		args[2*i] = a.Key
+		args[2*i+1] = a.Value
+	}
+
+	slog.Info(name, args...)
+}
+
+func (w wrapSpan) RecordError(err error, options ...trace.EventOption) {
+	w.Span.RecordError(err, options...)
+
+	if err == nil {
+		return
+	}
+	cfg := trace.NewEventConfig(options...)
+
+	attrs := cfg.Attributes()
+	args := make([]any, len(attrs)*2)
+
+	for i, a := range attrs {
+		args[2*i] = a.Key
+		args[2*i+1] = a.Value
+	}
+
+	slog.Error(err.Error(), args...)
+}
+
 func Span(ctx context.Context, opts ...trace.SpanStartOption) (context.Context, trace.Span) {
 	name, attrs := attrs(ctx)
 	attrs = append(attrs, attribute.String("name", name))
 	ctx, span := Tracer(ctx).Start(ctx, name, opts...)
+	span = &wrapSpan{span}
+
 	span.SetAttributes(attrs...)
 
 	return ctx, span
