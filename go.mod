@@ -11,7 +11,7 @@ require (
 	github.com/vektah/gqlparser/v2 v2.5.6
 	go.opentelemetry.io/otel v1.18.0
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp v1.18.0
-	go.opentelemetry.io/otel/sdk/metric v0.39.0
+	go.opentelemetry.io/otel/sdk/metric v0.41.0
 	go.uber.org/multierr v1.11.0
 	golang.org/x/sync v0.3.0
 )

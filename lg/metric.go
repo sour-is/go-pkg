@@ -16,7 +16,6 @@ import (
 	"go.opentelemetry.io/otel/exporters/prometheus"
 	api "go.opentelemetry.io/otel/metric"
 	sdk "go.opentelemetry.io/otel/sdk/metric"
-	"go.opentelemetry.io/otel/sdk/metric/aggregation"
 	"go.opentelemetry.io/otel/sdk/resource"
 )
 
@@ -59,7 +58,7 @@ func initMetrics(ctx context.Context, name string) (context.Context, func() erro
 		sdk.WithView(sdk.NewView(
 			sdk.Instrument{Name: "histogram_*"},
 			sdk.Stream{
-				Aggregation: aggregation.ExplicitBucketHistogram{
+				Aggregation: sdk.AggregationExplicitBucketHistogram{
 					Boundaries: []float64{
 						2 << 6, 2 << 8, 2 << 10, 2 << 12, 2 << 14, 2 << 16, 2 << 18, 2 << 20, 2 << 22, 2 << 24, 2 << 26, 2 << 28,
 					},
