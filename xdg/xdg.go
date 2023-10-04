@@ -29,12 +29,6 @@ var (
 	EnvFontsDir        = setENV("XDG_FONTS_DIR", defaultFontDirs)
 )
 
-func setENV(name, value string) string {
-	if _, ok := os.LookupEnv(name); !ok {
-		os.Setenv(name, value)
-	}
-	return literal(name)
-}
 func Get(base, suffix string) string {
 	paths := strings.Split(os.ExpandEnv(base), string(os.PathListSeparator))
 	for i, path := range paths {
@@ -44,6 +38,13 @@ func Get(base, suffix string) string {
 		paths[i] = os.ExpandEnv(filepath.Join(path, suffix))
 	}
 	return strings.Join(paths, string(os.PathListSeparator))
+}
+
+func setENV(name, value string) string {
+	if _, ok := os.LookupEnv(name); !ok {
+		os.Setenv(name, value)
+	}
+	return literal(name)
 }
 
 func getHome() string {
