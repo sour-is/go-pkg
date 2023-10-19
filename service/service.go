@@ -93,7 +93,7 @@ func (s *Harness) Run(ctx context.Context, appName, version string) error {
 		span.End()
 	}
 
-	g, _ := errgroup.WithContext(ctx)
+	g, ctx := errgroup.WithContext(ctx)
 	g.Go(func() error {
 		<-ctx.Done()
 		// shutdown jobs
@@ -111,7 +111,10 @@ func (s *Harness) Run(ctx context.Context, appName, version string) error {
 	close(s.onRunning)
 
 	err := g.Wait()
+	if err != nil {
+		log.Printf("Shutdown due to error: %s", err)
 
+	}
 	return err
 }
 

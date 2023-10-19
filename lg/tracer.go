@@ -71,7 +71,7 @@ func (w wrapSpan) AddEvent(name string, options ...trace.EventOption) {
 		args[2*i+1] = a.Value
 	}
 
-	slog.Info(name, args...)
+	slog.Debug(name, args...)
 }
 
 func (w wrapSpan) RecordError(err error, options ...trace.EventOption) {
@@ -142,7 +142,7 @@ func initTracing(ctx context.Context, name string) (context.Context, func() erro
 		return ctx, nil
 	}
 
-	exporterAddr := env.Default("EV_TRACE_ENDPOINT", "")
+	exporterAddr := env.Default("TRACE_ENDPOINT", "")
 	if exporterAddr == "" {
 		return ctx, nil
 	}
