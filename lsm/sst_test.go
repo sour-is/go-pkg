@@ -1,5 +1,6 @@
 // SPDX-FileCopyrightText: 2023 Jon Lundy <jon@xuu.cc>
 // SPDX-License-Identifier: BSD-3-Clause
+
 package lsm
 
 import (
@@ -39,19 +40,19 @@ func TestLargeFile(t *testing.T) {
 	}
 	t.Log(f.Stat())
 
-	tt, ok, err := sf.Find(needle)
+	tt, ok, err := sf.Find(needle, false)
 	is.NoErr(err)
 	is.True(ok)
 	key, val := tt.KeyValue()
 	t.Log(string(key), val)
 
-	tt, ok, err = sf.Find([]byte("needle"))
+	tt, ok, err = sf.Find([]byte("needle"), false)
 	is.NoErr(err)
 	is.True(!ok)
 	key, val = tt.KeyValue()
 	t.Log(string(key), val)
 
-	tt, ok, err = sf.Find([]byte{'\xff'})
+	tt, ok, err = sf.Find([]byte{'\xff'}, false)
 	is.NoErr(err)
 	is.True(!ok)
 	key, val = tt.KeyValue()
@@ -85,23 +86,28 @@ func TestLargeFileDisk(t *testing.T) {
 		is.NoErr(err)
 		k, v := e.KeyValue()
 		needle = k
-		t.Logf("Segment-%d: %s = %d", i, k, v)
+
+		ok, err := s.VerifyHash()
+		is.NoErr(err)
+
+		t.Logf("Segment-%d: %s = %d %t", i, k, v, ok)
+		is.True(ok)
 	}
 	t.Log(f.Stat())
 
-	tt, ok, err := sf.Find(needle)
+	tt, ok, err := sf.Find(needle, false)
 	is.NoErr(err)
 	is.True(ok)
 	key, val := tt.KeyValue()
 	t.Log(string(key), val)
 
-	tt, ok, err = sf.Find([]byte("needle"))
+	tt, ok, err = sf.Find([]byte("needle"), false)
 	is.NoErr(err)
 	is.True(!ok)
 	key, val = tt.KeyValue()
 	t.Log(string(key), val)
 
-	tt, ok, err = sf.Find([]byte{'\xff'})
+	tt, ok, err = sf.Find([]byte{'\xff'}, false)
 	is.NoErr(err)
 	is.True(!ok)
 	key, val = tt.KeyValue()
@@ -133,7 +139,7 @@ func BenchmarkLargeFile(b *testing.B) {
 		if each > 0 && n%each == 0 {
 			b.Log(n)
 		}
-		_, ok, err := sf.Find(keys[n])
+		_, ok, err := sf.Find(keys[n], false)
 		if err != nil {
 			b.Error(err)
 		}
@@ -144,40 +150,48 @@ func BenchmarkLargeFile(b *testing.B) {
 	b.Log("okays=", b.N, okays)
 }
 
-func BenchmarkLargeFileB(b *testing.B) {
-	segCount := 4098 / 16
-	f := randFile(b, 2_000_000, segCount)
+// TestFindRange is an initial range find for start and stop of a range of needles.
+// TODO: start the second query from where the first left off. Use an iterator?
+func TestFindRange(t *testing.T) {
+	is := is.New(t)
 
+	f := basicFile(t, 
+		entries{
+			{"AD", 5},
+			{"AC", 5},
+			{"AB", 4},
+			{"AB", 3},
+		},
+		entries{
+			{"AB", 2},
+			{"AA", 1},
+		},
+	)
 	sf, err := ReadFile(f)
-	if err != nil {
-		b.Error(err)
-	}
-	key := make([]byte, 5)
-	keys := make([][]byte, b.N)
-	for i := range keys {
-		_, err = crand.Read(key)
-		if err != nil {
-			b.Error(err)
-		}
-		keys[i] = []byte(base64.RawURLEncoding.EncodeToString(key))
-	}
-	b.Log("ready", b.N)
-	b.ResetTimer()
-	okays := 0
-	each := b.N / 10
-	for n := 0; n < b.N; n++ {
-		if each > 0 && n%each == 0 {
-			b.Log(n)
-		}
-		_, ok, err := sf.Find(keys[n])
-		if err != nil {
-			b.Error(err)
-		}
-		if ok {
-			okays++
-		}
-	}
-	b.Log("okays=", b.N, okays)
+	is.NoErr(err)
+
+	var ok bool
+	var first, last  *entryBytes
+
+	first, ok, err = sf.Find([]byte("AB"), true)
+	is.NoErr(err)
+
+	key, val := first.KeyValue()
+	t.Log(string(key), val)
+
+	is.True(ok)
+	is.Equal(key, []byte("AB"))
+	is.Equal(val, uint64(2))
+
+	last, ok, err = sf.Find([]byte("AC"), false)
+	is.NoErr(err)
+
+	key, val = last.KeyValue()
+	t.Log(string(key), val)
+
+	is.True(ok)
+	is.Equal(key, []byte("AC"))
+	is.Equal(val, uint64(5))
 }
 
 func randFile(t interface {

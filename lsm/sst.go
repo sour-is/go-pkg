@@ -1,5 +1,12 @@
 // SPDX-FileCopyrightText: 2023 Jon Lundy <jon@xuu.cc>
 // SPDX-License-Identifier: BSD-3-Clause
+
+// lsm -- Log Structured Merge-Tree
+//
+// This is a basic LSM tree using a SSTable optimized for append only writing. On disk data is organized into time ordered
+// files of segments, containing reverse sorted keys. Each segment ends with a magic value `Souris\x01`, a 4byte hash, count of
+// segment entries, and data length.
+
 package lsm
 
 import (
@@ -23,11 +30,11 @@ var (
 )
 
 type header struct {
-	sig     []byte
-	entries uint64
-	datalen uint64
-	headlen uint64
-	end     int64
+	sig     []byte // 4Byte signature
+	entries uint64 // count of entries in segment
+	datalen uint64 // length of data
+	headlen uint64 // length of header
+	end     int64  // location of end of data/start of header (start of data is `end - datalen`)
 }
 
 // ReadHead parse header from a segment. reads from the end of slice of length segmentFooterLength
@@ -173,8 +180,21 @@ func (s *segmentReader) FirstEntry() (*entryBytes, error) {
 	return e, err
 }
 
+func (s *segmentReader) VerifyHash() (bool, error) {
+	h := hash()
+	data := make([]byte, s.head.datalen)
+	_, err := s.rd.ReadAt(data, s.head.end-int64(s.head.datalen))
+	if err != nil {
+		return false, err
+	}
+	_, err = h.Write(data)
+	ok := bytes.Equal(h.Sum(nil), s.head.sig)
+
+	return ok, err
+}
+
 // Find locates needle within a segment. if it cant find it will return the nearest key before needle.
-func (s *segmentReader) Find(needle []byte) (*entryBytes, bool, error) {
+func (s *segmentReader) Find(needle []byte, first bool) (*entryBytes, bool, error) {
 	if s == nil {
 		return nil, false, nil
 	}
@@ -184,23 +204,27 @@ func (s *segmentReader) Find(needle []byte) (*entryBytes, bool, error) {
 	}
 
 	last := e
+	found := false
 	for pos > 0 {
 		key, _ := e.KeyValue()
 		switch bytes.Compare(key, needle) {
+		case 1: // key=ccc, needle=bbb
+			return last, found, nil
 		case 0: // equal
-			return e, true, nil
+			if first {
+				return e, true, nil
+			}
+			found = true
+			fallthrough
 		case -1: // key=aaa, needle=bbb
 			last = e
 			e, pos, err = s.readEntryAt(pos)
 			if err != nil {
-				return nil, false, err
+				return nil, found, err
 			}
-
-		case 1: // key=ccc, needle=bbb
-			return last, false, nil
 		}
 	}
-	return last, false, nil
+	return last, found, nil
 }
 func (s *segmentReader) readEntryAt(pos int64) (*entryBytes, int64, error) {
 	if pos < 0 {
@@ -217,7 +241,10 @@ func (s *segmentReader) readEntryAt(pos int64) (*entryBytes, int64, error) {
 }
 
 type logFile struct {
-	rd       interface{io.ReaderAt; io.WriterTo}
+	rd interface {
+		io.ReaderAt
+		io.WriterTo
+	}
 	segments []segmentReader
 
 	fs.File
@@ -232,7 +259,10 @@ func ReadFile(fd fs.File) (*logFile, error) {
 	}
 
 	eof := stat.Size()
-	if rd, ok := fd.(interface{io.ReaderAt; io.WriterTo}); ok {
+	if rd, ok := fd.(interface {
+		io.ReaderAt
+		io.WriterTo
+	}); ok {
 		l.rd = rd
 
 	} else {
@@ -243,8 +273,8 @@ func ReadFile(fd fs.File) (*logFile, error) {
 		l.rd = bytes.NewReader(rd)
 	}
 
+	head := make([]byte, segmentFooterLength)
 	for eof > 0 {
-		head := make([]byte, segmentFooterLength)
 		_, err = l.rd.ReadAt(head, eof-int64(segmentFooterLength))
 		if err != nil {
 			return nil, err
@@ -285,7 +315,7 @@ func (l *logFile) LoadSegment(pos int64) (*segmentBytes, error) {
 
 	return &segmentBytes{b, -1}, nil
 }
-func (l *logFile) Find(needle []byte) (*entryBytes, bool, error) {
+func (l *logFile) Find(needle []byte, first bool) (*entryBytes, bool, error) {
 	var last segmentReader
 
 	for _, s := range l.segments {
@@ -294,13 +324,16 @@ func (l *logFile) Find(needle []byte) (*entryBytes, bool, error) {
 			return nil, false, err
 		}
 		k, _ := e.KeyValue()
-		if bytes.Compare(k, needle) > 0 {
+		if first && bytes.Compare(k, needle) >= 0 {
+			break
+		}
+		if !first && bytes.Compare(k, needle) > 0 {
 			break
 		}
 		last = s
 	}
 
-	return last.Find(needle)
+	return last.Find(needle, first)
 }
 func (l *logFile) WriteTo(w io.Writer) (int64, error) {
 	return l.rd.WriteTo(w)
