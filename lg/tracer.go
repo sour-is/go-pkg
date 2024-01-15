@@ -64,12 +64,11 @@ func (w wrapSpan) AddEvent(name string, options ...trace.EventOption) {
 	cfg := trace.NewEventConfig(options...)
 
 	attrs := cfg.Attributes()
-	args := make([]any, len(attrs)*2)
+	args := make([]any, len(attrs))
 
 	for i, a := range attrs {
-		args[2*i] = a.Key
-		args[2*i+1] = a.Value
-	}
+		args[i] = slog.Attr{Key: string(a.Key), Value: slog.StringValue(a.Value.AsString())}
+	} 
 
 	slog.Debug(name, args...)
 }

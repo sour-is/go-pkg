@@ -38,9 +38,11 @@ func initMetrics(ctx context.Context, name string) (context.Context, func() erro
 	goversion := ""
 	pkg := ""
 	host := ""
+	version := "0.0.1"
 	if info, ok := debug.ReadBuildInfo(); ok {
 		goversion = info.GoVersion
 		pkg = info.Path
+		version = info.Main.Version
 	}
 	if h, err := os.Hostname(); err == nil {
 		host = h
@@ -69,7 +71,7 @@ func initMetrics(ctx context.Context, name string) (context.Context, func() erro
 	)
 
 	meter := provider.Meter(name,
-		api.WithInstrumentationVersion("0.0.1"),
+		api.WithInstrumentationVersion(version),
 		api.WithInstrumentationAttributes(
 			attribute.String("app", name),
 			attribute.String("host", host),

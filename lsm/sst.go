@@ -316,15 +316,24 @@ func (l *logFile) LoadSegment(pos int64) (*segmentBytes, error) {
 	return &segmentBytes{b, -1}, nil
 }
 func (l *logFile) Find(needle []byte, first bool) (*entryBytes, bool, error) {
-	var last segmentReader
+	var cur, last segmentReader
 
 	for _, s := range l.segments {
-		e, err := s.FirstEntry()
+		cur = s
+		e, err := cur.FirstEntry()
 		if err != nil {
 			return nil, false, err
 		}
 		k, _ := e.KeyValue()
-		if first && bytes.Compare(k, needle) >= 0 {
+
+		if first && bytes.Equal(k, needle) {
+			break
+		}
+		if first && bytes.Compare(k, needle) > 0 {
+			e, ok, err := cur.Find(needle, first)
+			if ok || err != nil{
+				return e, ok, err
+			}
 			break
 		}
 		if !first && bytes.Compare(k, needle) > 0 {
@@ -333,7 +342,12 @@ func (l *logFile) Find(needle []byte, first bool) (*entryBytes, bool, error) {
 		last = s
 	}
 
-	return last.Find(needle, first)
+	e, ok, err := last.Find(needle, first)
+	if ok || err != nil{
+		return e, ok, err
+	}
+	// if by mistake it was not found in the last.. check the next segment.
+	return cur.Find(needle, first)
 }
 func (l *logFile) WriteTo(w io.Writer) (int64, error) {
 	return l.rd.WriteTo(w)

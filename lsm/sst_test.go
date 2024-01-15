@@ -40,7 +40,7 @@ func TestLargeFile(t *testing.T) {
 	}
 	t.Log(f.Stat())
 
-	tt, ok, err := sf.Find(needle, false)
+	tt, ok, err := sf.Find(needle, true)
 	is.NoErr(err)
 	is.True(ok)
 	key, val := tt.KeyValue()
@@ -182,6 +182,17 @@ func TestFindRange(t *testing.T) {
 	is.True(ok)
 	is.Equal(key, []byte("AB"))
 	is.Equal(val, uint64(2))
+
+	last, ok, err = sf.Find([]byte("AB"), false)
+	is.NoErr(err)
+
+	key, val = last.KeyValue()
+	t.Log(string(key), val)
+
+	is.True(ok)
+	is.Equal(key, []byte("AB"))
+	is.Equal(val, uint64(4))
+
 
 	last, ok, err = sf.Find([]byte("AC"), false)
 	is.NoErr(err)
