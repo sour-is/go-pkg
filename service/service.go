@@ -35,10 +35,11 @@ func (s *Harness) Setup(ctx context.Context, apps ...application) error {
 	ctx, span := lg.Span(ctx)
 	defer span.End()
 
+	s.onRunning = make(chan struct{})
+
 	// setup crontab
 	c := cron.New(cron.DefaultGranularity)
 	s.OnStart(c.Run)
-	s.onRunning = make(chan struct{})
 	s.crontab = c
 
 	var err error

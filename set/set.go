@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"go.sour.is/pkg/math"
+	"golang.org/x/exp/maps"
 )
 
 type Set[T comparable] map[T]struct{}
@@ -32,6 +33,9 @@ func (s Set[T]) Delete(items ...T) Set[T] {
 		delete(s, i)
 	}
 	return s
+}
+func (s Set[T]) Values() []T {
+	return maps.Keys(s)
 }
 
 func (s Set[T]) Equal(e Set[T]) bool {

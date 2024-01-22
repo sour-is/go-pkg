@@ -127,9 +127,6 @@ func (c *cron) run(ctx context.Context, now time.Time) {
 	case <-timer.C:
 	}
 
-	span.AddEvent("Cron Run: " + now.Format(time.RFC822))
-	// fmt.Println("Cron Run: ", now.Format(time.RFC822))
-
 	c.state.Use(ctx, func(ctx context.Context, state *state) error {
 		run = append(run, state.queue...)
 		state.queue = state.queue[:0]
@@ -147,6 +144,9 @@ func (c *cron) run(ctx context.Context, now time.Time) {
 	if len(run) == 0 {
 		return
 	}
+
+	span.AddEvent("Cron Run: " + now.Format(time.RFC822))
+	// fmt.Println("Cron Run: ", now.Format(time.RFC822))
 
 	wg, _ := errgroup.WithContext(ctx)
 

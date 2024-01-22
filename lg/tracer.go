@@ -58,17 +58,56 @@ type wrapSpan struct {
 	trace.Span
 }
 
+func LogQuery(q string, args []any, err error) (string, trace.EventOption) {
+	var attrs []attribute.KeyValue
+	for k, v := range args {
+		var attr attribute.KeyValue
+		switch v:=v.(type) {
+		case int64:
+			attr = attribute.Int64(
+				fmt.Sprintf("$%d", k),
+				v,
+			)
+		case string:
+			attr = attribute.String(
+				fmt.Sprintf("$%d", k),
+				v,
+			)
+		default:
+			attr = attribute.String(
+				fmt.Sprintf("$%d", k),
+				fmt.Sprint(v),
+			)
+		}
+
+		attrs = append(attrs, attr)
+	}
+	
+	return q, trace.WithAttributes(attrs...)
+}
+
 func (w wrapSpan) AddEvent(name string, options ...trace.EventOption) {
 	w.Span.AddEvent(name, options...)
 
 	cfg := trace.NewEventConfig(options...)
 
 	attrs := cfg.Attributes()
-	args := make([]any, len(attrs)*2)
+	args := make([]any, len(attrs))
 
 	for i, a := range attrs {
-		args[2*i] = a.Key
-		args[2*i+1] = a.Value
+		switch a.Value.Type() {
+		case attribute.BOOL:
+			args[i] = slog.Bool(string(a.Key), a.Value.AsBool())
+		case attribute.INT64:
+			args[i] = slog.Int64(string(a.Key), a.Value.AsInt64())
+		case attribute.FLOAT64:
+			args[i] = slog.Float64(string(a.Key), a.Value.AsFloat64())
+		case attribute.STRING:
+			args[i] = slog.String(string(a.Key), a.Value.AsString())
+		default:
+			args[i] = slog.Any(string(a.Key), a.Value.AsInterface())
+		}
+		
 	}
 
 	slog.Debug(name, args...)

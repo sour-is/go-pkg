@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>☿ Mercury ☿</title>
+    <script src="https://unpkg.com/htmx.org@2.0.0-alpha1/dist/htmx.min.js"></script>
+
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/firacode@6.2.0/distr/fira_code.css" />
+    <link rel="stylesheet" href="/style.css" />
+</head>
+
+<body>
+    <header>
+        <nav style="position: absolute; top:0; right:50px" hx-trigger="load" hx-get="/ident"></nav>
+        <h1>☿ Mercury ☿</h1>
+    </header>
+
+    <div class="container">
+        <div>
+            <form class="search" hx-get="/api/v1/mercury/config" hx-target="#config-results"
+                hx-headers='{"Accept": "text/html"}''>
+                <div>@</div>
+                <input id="space-config" name="space" type="text" placeholder="Space...">
+                <button type="submit">Load</button>
+            </form>
+            <code tabindex="0"><pre id="config-results"></pre></code>
+        </div>
+
+        <div>
+            <form class="edit" hx-post="/api/v1/mercury/config" hx-target="#space-saved" hx-encoding="multipart/form-data">
+                <button type="submit">Save</button>
+                <br />
+                <textarea name="content" rows="45" wrap="off"
+                    onkeyup="if (this.scrollHeight > this.clientHeight) this.style.height = this.scrollHeight + ' px';"
+                style="overflow:auto; overflow-y:hidden; transition: height 0.2s ease-out;"></textarea>
+            </form>
+            <pre id="space-saved"></pre>
+        </div>
+    </div>
+
+    <footer>
+        sour.is 🅭2024
+        <span hx-trigger="load" hx-get="/api/v1/app-info"></span>
+    </footer>
+</body>
+
+</html>

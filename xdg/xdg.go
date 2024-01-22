@@ -4,6 +4,7 @@
 package xdg
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -36,6 +37,9 @@ func setENV(name, value string) string {
 	return literal(name)
 }
 func Get(base, suffix string) string {
+	return strings.Join(paths(base, suffix), string(os.PathListSeparator))
+}
+func paths(base, suffix string) []string {
 	paths := strings.Split(os.ExpandEnv(base), string(os.PathListSeparator))
 	for i, path := range paths {
 		if strings.HasPrefix(path, "~") {
@@ -43,7 +47,17 @@ func Get(base, suffix string) string {
 		}
 		paths[i] = os.ExpandEnv(filepath.Join(path, suffix))
 	}
-	return strings.Join(paths, string(os.PathListSeparator))
+	return paths
+}
+func Find(base, filename string) []string {
+	var files []string
+	for _, f := range paths(base, filename) {
+		if ok, _ := exists(f); !ok {
+			continue
+		}
+		files = append(files, f)
+	}
+	return files
 }
 
 func getHome() string {
@@ -52,4 +66,18 @@ func getHome() string {
 		return "."
 	}
 	return home
+}
+
+func exists(name string) (bool, error) {
+	s, err := os.Stat(name)
+	if err == nil {
+		return true, nil
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if s.IsDir() {
+		return false, nil
+	}
+	return false, err
 }

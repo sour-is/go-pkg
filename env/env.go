@@ -9,35 +9,16 @@ import (
 	"strings"
 )
 
-func Default(name, defaultValue string) string {
+func Default(name, defaultValue string) (s string) {
 	name = strings.TrimSpace(name)
-	defaultValue = strings.TrimSpace(defaultValue)
-	if v := strings.TrimSpace(os.Getenv(name)); v != "" {
-		slog.Info("env", name, v)
-		return v
-	}
-	slog.Info("env", name, defaultValue+" (default)")
-	return defaultValue
-}
+	s = strings.TrimSpace(defaultValue)
 
-type secret string
+	if v, ok := os.LookupEnv(name); ok {
+		s = strings.TrimSpace(v)
+		slog.Info("env", slog.String(name, v))
+		return
+	}
 
-func (s secret) String() string {
-	if s == "" {
-		return "(nil)"
-	}
-	return "***"
-}
-func (s secret) Secret() string {
-	return string(s)
-}
-func Secret(name, defaultValue string) secret {
-	name = strings.TrimSpace(name)
-	defaultValue = strings.TrimSpace(defaultValue)
-	if v := strings.TrimSpace(os.Getenv(name)); v != "" {
-		slog.Info("env", name, secret(v))
-		return secret(v)
-	}
-	slog.Info("env", name, secret(defaultValue).String()+" (default)")
-	return secret(defaultValue)
+	slog.Info("env", slog.String(name, s+" (default)"))
+	return
 }
