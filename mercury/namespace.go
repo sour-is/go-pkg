@@ -20,17 +20,11 @@ type NamespaceSearch []NamespaceSpec
 func ParseNamespace(ns string) (lis NamespaceSearch) {
 	for _, part := range strings.Split(ns, ";") {
 		if strings.HasPrefix(part, "trace:") {
-			for _, s := range strings.Split(part[6:], ",") {
-				lis = append(lis, NamespaceTrace(s))
-			}
+			lis = append(lis, NamespaceTrace(part[6:]))
+		} else if strings.Contains(part, "*") {
+			lis = append(lis, NamespaceStar(part))
 		} else {
-			for _, s := range strings.Split(part, ",") {
-				if strings.Contains(s, "*") {
-					lis = append(lis, NamespaceStar(s))
-				} else {
-					lis = append(lis, NamespaceNode(s))
-				}
-			}
+			lis = append(lis, NamespaceNode(part))
 		}
 	}
 
@@ -44,7 +38,7 @@ func (n NamespaceSearch) String() string {
 	for _, v := range n {
 		lis = append(lis, v.String())
 	}
-	return strings.Join(lis, ",")
+	return strings.Join(lis, ";")
 }
 
 // Match returns true if any match.

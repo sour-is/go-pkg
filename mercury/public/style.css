@@ -6,6 +6,7 @@
 body {
     margin: 0;
     min-height: 100vh;
+    background: rgb(210, 221, 240);
 }
 
 header {
@@ -57,6 +58,11 @@ code i {
 }
 
 code em {
+    color: orangered;
+}
+
+code small {
+    font-size-adjust: 50%;
     color: orange;
 }
 
@@ -94,7 +100,7 @@ footer>span {
 .container>div {
     overflow: auto;
     padding: 10px;
-    background: rgb(238, 174, 202);
+    background-color: white;
     border: 0px ;
 }
 
@@ -158,7 +164,7 @@ footer>span {
 }
 
 @media (prefers-color-scheme: dark) {
-    html {
+    html, body {
         color: white;
         background: #111
     }

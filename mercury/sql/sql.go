@@ -166,7 +166,7 @@ func (p *sqlHandler) listSpace(ctx context.Context, tx sq.BaseRunner, where sq.S
 		tx = p.db
 	}
 
-	query := sq.Select(`"id"`, `"space"`, `"tags"`, `"notes"`).
+	query := sq.Select(`"id"`, `"space"`, `"notes"`, `"tags"`, `"trailer"`).
 		From("mercury_spaces").
 		Where(where).
 		OrderBy("space asc").
@@ -189,6 +189,7 @@ func (p *sqlHandler) listSpace(ctx context.Context, tx sq.BaseRunner, where sq.S
 			&s.Space.Space,
 			listScan(&s.Space.Notes, p.listFormat),
 			listScan(&s.Space.Tags, p.listFormat),
+			listScan(&s.Trailer, p.listFormat),
 		)
 		if err != nil {
 			return nil, err
@@ -287,6 +288,7 @@ func (p *sqlHandler) WriteConfig(ctx context.Context, config mercury.Config) (er
 			Where(sq.Eq{"id": updateIDs[i]}).
 			Set("tags", listValue(u.Tags, p.listFormat)).
 			Set("notes", listValue(u.Notes, p.listFormat)).
+			Set("trailer", listValue(u.Trailer, p.listFormat)).
 			PlaceholderFormat(sq.Dollar)
 		span.AddEvent(lg.LogQuery(query.ToSql()))
 		_, err := query.RunWith(tx).ExecContext(ctx)
@@ -305,8 +307,13 @@ func (p *sqlHandler) WriteConfig(ctx context.Context, config mercury.Config) (er
 		var id uint64
 		query := sq.Insert("mercury_spaces").
 			PlaceholderFormat(sq.Dollar).
-			Columns("space", "tags", "notes").
-			Values(s.Space, listValue(s.Tags, p.listFormat), listValue(s.Notes, p.listFormat)).
+			Columns("space", "tags", "notes", "trailer").
+			Values(
+				s.Space, 
+				listValue(s.Tags, p.listFormat), 
+				listValue(s.Notes, p.listFormat),
+				listValue(s.Trailer, p.listFormat),
+				).
 			Suffix("RETURNING \"id\"")
 		span.AddEvent(lg.LogQuery(query.ToSql()))
 

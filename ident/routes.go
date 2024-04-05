@@ -2,16 +2,10 @@ package ident
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net/http"
-	"time"
 
-	"github.com/oklog/ulid/v2"
-
-	"go.sour.is/passwd"
 	"go.sour.is/pkg/lg"
-	"go.sour.is/pkg/locker"
 )
 
 var (
@@ -24,7 +18,7 @@ var (
 			nick = `value="` + nick + `"`
 		}
 		return `
-	<form id="login" hx-post="ident/login" hx-target="#login" hx-swap="outerHTML">
+	<form id="login" hx-post="ident/session" hx-target="#login" hx-swap="outerHTML">
 		<input required id="login-identity" name="identity" type="text" ` + nick + `placeholder="Identity..." />
 		<input required id="login-passwd" name="passwd" type="password" ` + indicator + ` placeholder="Password..." />
 
@@ -32,8 +26,12 @@ var (
 		<button hx-get="ident/register">Register</button>
 	</form>`
 	}
-	logoutForm = func(display string) string {
-		return `<button id="login" hx-post="ident/logout" hx-target="#login" hx-swap="outerHTML">` + display + ` (logout)</button>`
+	logoutForm = func(id Ident) string {
+		display := id.Identity()
+		if id, ok := id.(interface{ DisplayName() string }); ok {
+			display = id.DisplayName()
+		}
+		return `<button id="login" hx-delete="ident/session" hx-target="#login" hx-swap="outerHTML">` + display + ` (logout)</button>`
 	}
 	registerForm = `
 	<form id="login" hx-post="ident/register" hx-target="#login" hx-swap="outerHTML">
@@ -46,152 +44,104 @@ var (
 	</form>`
 )
 
-type sessions map[ulid.ULID]Ident
-
-type root struct {
-	idm      *IDM
-	sessions *locker.Locked[sessions]
+type sessionIF interface {
+	ReadIdent(r *http.Request) (Ident, error)
+	CreateSession(context.Context, http.ResponseWriter, Ident) error
+	DestroySession(context.Context, http.ResponseWriter, Ident) error
 }
 
-func NewHTTP(idm *IDM) *root {
-	sessions := make(sessions)
+type root struct {
+	idm     *IDM
+	session sessionIF
+}
+
+func NewHTTP(idm *IDM, session sessionIF) *root {
+	idm.Add(0, session)
 	return &root{
-		idm:      idm,
-		sessions: locker.New(sessions),
+		idm:     idm,
+		session: session,
 	}
 }
 
 func (s *root) RegisterHTTP(mux *http.ServeMux) {
-	mux.HandleFunc("/ident", s.get)
-	mux.HandleFunc("/ident/register", s.register)
-	mux.HandleFunc("/ident/login", s.login)
-	mux.HandleFunc("/ident/logout", s.logout)
+	mux.HandleFunc("/ident", s.sessionHTTP)
+	mux.HandleFunc("/ident/register", s.registerHTTP)
+	mux.HandleFunc("/ident/session", s.sessionHTTP)
 }
 func (s *root) RegisterAPIv1(mux *http.ServeMux) {
+	mux.HandleFunc("GET /ident", s.sessionV1)
 	mux.HandleFunc("POST /ident", s.registerV1)
-	mux.HandleFunc("POST /ident/session", s.loginV1)
-	mux.HandleFunc("DELETE /ident/session", s.logoutV1)
-	mux.HandleFunc("GET /ident", s.getV1)
+	mux.HandleFunc("/ident/session", s.sessionV1)
 }
 func (s *root) RegisterMiddleware(hdlr http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx, span := lg.Span(r.Context())
 		defer span.End()
+		r = r.WithContext(ctx)
 
-		cookie, err := r.Cookie("sour.is-ident")
+		id, err := s.idm.ReadIdent(r)
 		span.RecordError(err)
-		if err != nil {
-			hdlr.ServeHTTP(w, r)
-			return
+		if id == nil {
+			id = Anonymous
 		}
-
-		sessionID, err := ulid.Parse(cookie.Value)
-		span.RecordError(err)
-
-		var id Ident = Anonymous
-		if err == nil {
-			err = s.sessions.Use(ctx, func(ctx context.Context, sessions sessions) error {
-				if session, ok := sessions[sessionID]; ok {
-					id = session
-				}
-				return nil
-			})
-		}
-		span.RecordError(err)
 
 		r = r.WithContext(context.WithValue(r.Context(), contextKey, id))
 
 		hdlr.ServeHTTP(w, r)
 	})
 }
-func (s *root) createSession(ctx context.Context, id Ident) error {
-	return s.sessions.Use(ctx, func(ctx context.Context, sessions sessions) error {
-		sessions[id.Session().SessionID] = id
-		return nil
-	})
-}
-func (s *root) destroySession(ctx context.Context, id Ident) error {
-	session := id.Session()
-	session.Active = false
 
-	return s.sessions.Use(ctx, func(ctx context.Context, sessions sessions) error {
-		delete(sessions, session.SessionID)
-		return nil
-	})
-}
-
-func (s *root) getV1(w http.ResponseWriter, r *http.Request) {
+func (s *root) sessionV1(w http.ResponseWriter, r *http.Request) {
 	ctx, span := lg.Span(r.Context())
 	defer span.End()
 
 	var id Ident = FromContext(ctx)
-	if id == nil {
-		http.Error(w, "NO_AUTH", http.StatusUnauthorized)
+	switch r.Method {
+	case http.MethodGet:
+		if id == nil {
+			http.Error(w, "NO_AUTH", http.StatusUnauthorized)
+			return
+		}
+		fmt.Fprint(w, id)
+	case http.MethodPost:
+		if !id.Session().Active {
+			http.Error(w, "NO_AUTH", http.StatusUnauthorized)
+			return
+		}
+	
+		err := s.session.CreateSession(ctx, w, id)
+		if err != nil {
+			span.RecordError(err)
+			http.Error(w, "ERR", http.StatusInternalServerError)
+			return
+		}
+	
+		fmt.Fprint(w, id)
+	
+	case http.MethodDelete:
+		if !id.Session().Active {
+			http.Error(w, "NO_AUTH", http.StatusUnauthorized)
+			return
+		}
+
+		err := s.session.DestroySession(ctx, w, FromContext(ctx))
+		if err != nil {
+			span.RecordError(err)
+			http.Error(w, "ERR", http.StatusInternalServerError)
+			return
+		}
+	
+		http.Error(w, "GONE", http.StatusGone)
+	
+	default:
+		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 		return
 	}
-	fmt.Fprint(w, id)
-}
-func (s *root) loginV1(w http.ResponseWriter, r *http.Request) {
-	ctx, span := lg.Span(r.Context())
-	defer span.End()
-
-	id, err := s.idm.ReadIdent(r)
-	span.RecordError(err)
-	if err != nil {
-		http.Error(w, "ERR", http.StatusInternalServerError)
-		return
-	}
-	if !id.Session().Active {
-		http.Error(w, "NO_AUTH", http.StatusUnauthorized)
-		return
-	}
-
-	err = s.createSession(ctx, id)
-	if err != nil {
-		span.RecordError(err)
-		http.Error(w, "ERR", http.StatusInternalServerError)
-		return
-	}
-
-	http.SetCookie(w, &http.Cookie{
-		Name:     "sour.is-ident",
-		Value:    id.Session().SessionID.String(),
-		Expires:  time.Time{},
-		Path:     "/",
-		Secure:   false,
-		HttpOnly: true,
-	})
-
-	fmt.Fprint(w, id)
-}
-func (s *root) logoutV1(w http.ResponseWriter, r *http.Request) {
-	ctx, span := lg.Span(r.Context())
-	defer span.End()
-
-	if r.Method != http.MethodPost {
-		http.Error(w, "ERR", http.StatusMethodNotAllowed)
-		return
-	}
-
-	err := s.destroySession(ctx, FromContext(ctx))
-	if err != nil {
-		span.RecordError(err)
-		http.Error(w, "NO_AUTH", http.StatusUnauthorized)
-		return
-	}
-
-	http.SetCookie(w, &http.Cookie{Name: "sour.is-ident", MaxAge: -1})
-
-	http.Error(w, "GONE", http.StatusGone)
 }
 func (s *root) registerV1(w http.ResponseWriter, r *http.Request) {
 	ctx, span := lg.Span(r.Context())
 	defer span.End()
 
-	if r.Method != http.MethodPost {
-		http.Error(w, "ERR", http.StatusMethodNotAllowed)
-		return
-	}
 	r.ParseForm()
 
 	identity := r.Form.Get("identity")
@@ -211,107 +161,60 @@ func (s *root) registerV1(w http.ResponseWriter, r *http.Request) {
 	http.Error(w, "OK "+identity, http.StatusCreated)
 }
 
-func (s *root) get(w http.ResponseWriter, r *http.Request) {
+func (s *root) sessionHTTP(w http.ResponseWriter, r *http.Request) {
 	ctx, span := lg.Span(r.Context())
 	defer span.End()
 
-	var id Ident = FromContext(ctx)
-	if id == nil {
-		http.Error(w, loginForm("", true), http.StatusOK)
-		return
-	}
+	id := FromContext(ctx)
 
-	if !id.Session().Active {
-		http.Error(w, loginForm("", true), http.StatusOK)
-		return
-	}
-
-	display := id.Identity()
-	if id, ok := id.(interface{ DisplayName() string }); ok {
-		display = id.DisplayName()
-	}
-	fmt.Fprint(w, logoutForm(display))
-}
-func (s *root) login(w http.ResponseWriter, r *http.Request) {
-	ctx, span := lg.Span(r.Context())
-	defer span.End()
-
-	if r.Method == http.MethodGet {
+	switch r.Method {
+	case http.MethodGet:
+		if id.Session().Active {
+			fmt.Fprint(w, logoutForm(id))
+			return
+		}
 		fmt.Fprint(w, loginForm("", true))
-		return
-	}
-
-	id, err := s.idm.ReadIdent(r)
-	span.RecordError(err)
-	if err != nil {
-		if errors.Is(err, passwd.ErrNoMatch) {
+	case http.MethodPost:
+		if !id.Session().Active {
 			http.Error(w, loginForm("", false), http.StatusOK)
 			return
 		}
-
-		http.Error(w, "ERROR", http.StatusInternalServerError)
-		return
+	
+		err := s.session.CreateSession(ctx, w, id)
+		span.RecordError(err)
+		if err != nil {
+			http.Error(w, "ERROR", http.StatusInternalServerError)
+			return
+		}
+	
+		fmt.Fprint(w, logoutForm(id))
+	case http.MethodDelete:
+		err := s.session.DestroySession(ctx, w, FromContext(ctx))
+		span.RecordError(err)
+		if err != nil {
+			http.Error(w, loginForm("", true), http.StatusUnauthorized)
+			return
+		}
+	
+		fmt.Fprint(w, loginForm("", true))
+	default:
+		http.Error(w, "ERROR", http.StatusMethodNotAllowed)
 	}
-
-	if !id.Session().Active {
-		http.Error(w, loginForm("", false), http.StatusOK)
-		return
-	}
-
-	err = s.createSession(ctx, id)
-	span.RecordError(err)
-	if err != nil {
-		http.Error(w, "ERROR", http.StatusInternalServerError)
-		return
-	}
-
-	http.SetCookie(w, &http.Cookie{
-		Name:     "sour.is-ident",
-		Value:    id.Session().SessionID.String(),
-		Expires:  time.Time{},
-		Path:     "/",
-		Secure:   false,
-		HttpOnly: true,
-	})
-
-	display := id.Identity()
-	if id, ok := id.(interface{ DisplayName() string }); ok {
-		display = id.DisplayName()
-	}
-	fmt.Fprint(w, logoutForm(display))
 }
-func (s *root) logout(w http.ResponseWriter, r *http.Request) {
+func (s *root) registerHTTP(w http.ResponseWriter, r *http.Request) {
 	ctx, span := lg.Span(r.Context())
 	defer span.End()
 
-	if r.Method != http.MethodPost {
-		http.Error(w, "ERR", http.StatusMethodNotAllowed)
-		return
-	}
-
-	http.SetCookie(w, &http.Cookie{Name: "sour.is-ident", MaxAge: -1})
-
-	err := s.destroySession(ctx, FromContext(ctx))
-	span.RecordError(err)
-	if err != nil {
-		http.Error(w, loginForm("", true), http.StatusUnauthorized)
-		return
-	}
-
-	fmt.Fprint(w, loginForm("", true))
-}
-func (s *root) register(w http.ResponseWriter, r *http.Request) {
-	ctx, span := lg.Span(r.Context())
-	defer span.End()
-
-	if r.Method == http.MethodGet {
+	switch r.Method {
+	case http.MethodGet:
 		fmt.Fprint(w, registerForm)
 		return
-	}
-
-	if r.Method != http.MethodPost {
+	case http.MethodPost:
+		// break
+	default:
 		http.Error(w, "ERR", http.StatusMethodNotAllowed)
 		return
+
 	}
 
 	r.ParseForm()
@@ -335,26 +238,12 @@ func (s *root) register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err = s.createSession(ctx, id)
+	err = s.session.CreateSession(ctx, w, id)
 	span.RecordError(err)
 	if err != nil {
 		http.Error(w, "ERROR", http.StatusInternalServerError)
 		return
 	}
 
-	http.SetCookie(w, &http.Cookie{
-		Name:     "sour.is-ident",
-		Value:    id.Session().SessionID.String(),
-		Expires:  time.Time{},
-		Path:     "/",
-		Secure:   false,
-		HttpOnly: true,
-	})
-
-	display = id.Identity()
-	if id, ok := id.(interface{ DisplayName() string }); ok {
-		display = id.DisplayName()
-	}
-
-	http.Error(w, logoutForm(display), http.StatusCreated)
+	http.Error(w, logoutForm(id), http.StatusCreated)
 }

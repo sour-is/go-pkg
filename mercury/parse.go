@@ -3,6 +3,7 @@ package mercury
 import (
 	"bufio"
 	"io"
+	"log"
 	"strings"
 )
 
@@ -49,6 +50,26 @@ func ParseText(body io.Reader) (config SpaceMap, err error) {
 			continue
 		}
 
+		if strings.HasPrefix(line, "----") && strings.HasSuffix(line, "----") {
+			var trailer []string
+
+			trailer = append(trailer, line)
+			for scanner.Scan() {
+				line = scanner.Text()
+				trailer = append(trailer, line)
+				if strings.HasPrefix(line, "----") && strings.HasSuffix(line, "----") {
+					break
+				}
+			}
+			c, ok := config[space]
+			if !ok {
+				c = &Space{Space: space}
+			}
+			log.Println(trailer)
+			c.Trailer = append(c.Trailer, trailer...)
+			config[space] = c
+			continue
+		}
 		if space == "" {
 			continue
 		}
@@ -59,10 +80,8 @@ func ParseText(body io.Reader) (config SpaceMap, err error) {
 		}
 
 		if strings.TrimSpace(sp[0]) == "" {
-			var c *Space
-			var ok bool
-
-			if c, ok = config[space]; !ok {
+			c, ok := config[space]
+			if !ok {
 				c = &Space{Space: space}
 			}
 
@@ -78,10 +97,8 @@ func ParseText(body io.Reader) (config SpaceMap, err error) {
 			tags = fields[1:]
 		}
 
-		var c *Space
-		var ok bool
-
-		if c, ok = config[space]; !ok {
+		c, ok := config[space]
+		if !ok {
 			c = &Space{Space: space}
 		}
 

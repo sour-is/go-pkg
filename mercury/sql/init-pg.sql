@@ -6,6 +6,7 @@ CREATE TABLE IF NOT EXISTS mercury_spaces
     id integer NOT NULL DEFAULT nextval('mercury_spaces_id_seq'::regclass),
     notes character varying[] NOT NULL DEFAULT '{}'::character varying[],
     tags character varying[] NOT NULL DEFAULT '{}'::character varying[],
+    trailer character varying[] NOT NULL DEFAULT '{}'::character varying[],
     CONSTRAINT mercury_namespace_pk PRIMARY KEY (id)
 );
 CREATE UNIQUE INDEX IF NOT EXISTS mercury_namespace_space_uindex
@@ -35,7 +36,8 @@ CREATE OR REPLACE VIEW mercury_registry_vw
     v.name,
     v."values",
     v.notes,
-    v.tags
+    v.tags,
+    s.trailer
  FROM mercury_spaces s
  JOIN mercury_values v ON s.id = v.id;
 

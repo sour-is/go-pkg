@@ -3,7 +3,8 @@ CREATE TABLE IF NOT EXISTS mercury_spaces
     space character varying NOT NULL unique,
     id integer NOT NULL CONSTRAINT mercury_namespace_pk PRIMARY KEY autoincrement,
     notes json NOT NULL DEFAULT '[]',
-    tags json NOT NULL DEFAULT '[]'
+    tags json NOT NULL DEFAULT '[]',
+    trailer json NOT NULL DEFAULT '[]'
 );
 
 CREATE TABLE IF NOT EXISTS mercury_values
@@ -27,7 +28,8 @@ CREATE VIEW if not exists mercury_registry_vw
     v.name,
     v."values",
     v.notes,
-    v.tags
+    v.tags,
+    s.trailer
  FROM mercury_spaces s
  JOIN mercury_values v ON s.id = v.id;
 

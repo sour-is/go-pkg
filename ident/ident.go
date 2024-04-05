@@ -2,6 +2,7 @@ package ident
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -52,11 +53,11 @@ func FromContext(ctx context.Context) Ident {
 type IDM struct {
 	rand    io.Reader
 	sources []source
-	pwd *passwd.Passwd
+	pwd     *passwd.Passwd
 }
 
 func NewIDM(pwd *passwd.Passwd, rand io.Reader) *IDM {
-	return &IDM{pwd: pwd, rand:rand}
+	return &IDM{pwd: pwd, rand: rand}
 }
 
 func (idm *IDM) Add(p int, h Handler) {
@@ -70,18 +71,17 @@ func (idm *IDM) Passwd(pass, hash []byte) ([]byte, error) {
 
 // ReadIdent read ident from a list of ident handlers
 func (idm *IDM) ReadIdent(r *http.Request) (Ident, error) {
+	var errs error
 	for _, source := range idm.sources {
 		u, err := source.ReadIdent(r)
-		if err != nil {
-			return Anonymous, err
-		}
+		errs = errors.Join(errs, err)
 
-		if u.Session().Active {
-			return u, err
+		if u != nil && u.Session().Active {
+			return u, errs
 		}
 	}
 
-	return Anonymous, nil
+	return Anonymous, errs
 }
 
 func (idm *IDM) RegisterIdent(ctx context.Context, identity, displayName string, passwd []byte) (Ident, error) {

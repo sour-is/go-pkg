@@ -62,10 +62,16 @@ func (lis Config) ToSpaceMap() SpaceMap {
 
 // String format config as string
 func (lis Config) String() string {
-	attLen := 0
-	tagLen := 0
 
-	for _, o := range lis {
+	var buf strings.Builder
+	for i, o := range lis {
+		attLen := 0
+		tagLen := 0
+
+		if i > 0 {
+			buf.WriteRune('\n')
+		}
+
 		for _, v := range o.List {
 			l := len(v.Name)
 			if attLen <= l {
@@ -77,10 +83,7 @@ func (lis Config) String() string {
 				tagLen = t
 			}
 		}
-	}
 
-	var buf strings.Builder
-	for _, o := range lis {
 		if len(o.Notes) > 0 {
 			buf.WriteString("# ")
 			buf.WriteString(strings.Join(o.Notes, "\n# "))
@@ -133,7 +136,10 @@ func (lis Config) String() string {
 			}
 		}
 
-		buf.WriteRune('\n')
+		for _, line := range o.Trailer {
+			buf.WriteString(line)
+			buf.WriteRune('\n')
+		}
 	}
 
 	return buf.String()
@@ -188,11 +194,21 @@ func (lis Config) EnvString() string {
 func (lis Config) INIString() string {
 	var buf strings.Builder
 	for _, o := range lis {
+		for _, note := range o.Notes {
+			buf.WriteString("; ")
+			buf.WriteString(note)
+			buf.WriteRune('\n')
+		}
 		buf.WriteRune('[')
 		buf.WriteString(o.Space)
 		buf.WriteRune(']')
 		buf.WriteRune('\n')
 		for _, v := range o.List {
+			for _, note := range v.Notes {
+				buf.WriteString("; ")
+				buf.WriteString(note)
+				buf.WriteRune('\n')
+			}
 			buf.WriteString(v.Name)
 			switch len(v.Values) {
 			case 0:
@@ -221,6 +237,13 @@ func (lis Config) INIString() string {
 				}
 			}
 		}
+		for _, line := range o.Trailer {
+			buf.WriteString("; ")
+			buf.WriteString(line)
+			buf.WriteRune('\n')
+		}
+
+		buf.WriteRune('\n')
 	}
 
 	return buf.String()
@@ -228,10 +251,16 @@ func (lis Config) INIString() string {
 
 // String format config as string
 func (lis Config) HTMLString() string {
-	attLen := 0
-	tagLen := 0
 
-	for _, o := range lis {
+	var buf strings.Builder
+	for i, o := range lis {
+		attLen := 0
+		tagLen := 0
+
+		if i > 0 {
+			buf.WriteRune('\n')
+		}
+
 		for _, v := range o.List {
 			l := len(v.Name)
 			if attLen <= l {
@@ -243,10 +272,7 @@ func (lis Config) HTMLString() string {
 				tagLen = t
 			}
 		}
-	}
 
-	var buf strings.Builder
-	for _, o := range lis {
 		if len(o.Notes) > 0 {
 			buf.WriteString("<i>")
 			buf.WriteString("# ")
@@ -311,7 +337,12 @@ func (lis Config) HTMLString() string {
 			}
 		}
 
-		buf.WriteRune('\n')
+		for _, line := range o.Trailer {
+			buf.WriteString("<small>")
+			buf.WriteString(line)
+			buf.WriteString("</small>")
+			buf.WriteRune('\n')
+		}
 	}
 
 	return buf.String()
@@ -319,10 +350,11 @@ func (lis Config) HTMLString() string {
 
 // Space stores a registry of spaces
 type Space struct {
-	Space string   `json:"space"`
-	Tags  []string `json:"tags,omitempty"`
-	Notes []string `json:"notes,omitempty"`
-	List  []Value  `json:"list,omitempty"`
+	Space   string   `json:"space"`
+	Tags    []string `json:"tags,omitempty"`
+	Notes   []string `json:"notes,omitempty"`
+	List    []Value  `json:"list,omitempty"`
+	Trailer []string `json:"trailer,omitempty"`
 }
 
 func NewSpace(space string) *Space {
@@ -437,7 +469,7 @@ type SpaceMap map[string]*Space
 func (m SpaceMap) Space(name string) (*Space, bool) {
 	s, ok := m[name]
 	return s, ok
-} 
+}
 
 // Rule is a type of rule
 type Rule struct {

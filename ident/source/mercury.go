@@ -12,6 +12,9 @@ import (
 	"go.sour.is/pkg/ident"
 )
 
+const identNS = "ident."
+const identSFX = ".credentials"
+
 type registry interface {
 	GetIndex(ctx context.Context, match, search string) (c mercury.Config, err error)
 	GetConfig(ctx context.Context, match, search, fields string) (mercury.Config, error)
@@ -22,12 +25,13 @@ type mercuryIdent struct {
 	identity string
 	display  string
 	passwd   []byte
+	ed25519  []byte
 	ident.SessionInfo
 }
 
 func (id *mercuryIdent) Identity() string    { return id.identity }
 func (id *mercuryIdent) DisplayName() string { return id.display }
-func (id *mercuryIdent) Space() string       { return "mercury.@" + id.identity }
+func (id *mercuryIdent) Space() string       { return identNS + "@" + id.identity }
 
 func (id *mercuryIdent) FromConfig(cfg mercury.Config) error {
 	if id == nil {
@@ -35,7 +39,7 @@ func (id *mercuryIdent) FromConfig(cfg mercury.Config) error {
 	}
 
 	for _, s := range cfg {
-		if !strings.HasPrefix(s.Space, "mercury.") {
+		if !strings.HasPrefix(s.Space, identNS) {
 			continue
 		}
 		if id.identity == "" {
@@ -44,7 +48,7 @@ func (id *mercuryIdent) FromConfig(cfg mercury.Config) error {
 		}
 
 		switch {
-		case strings.HasSuffix(s.Space, ".ident"):
+		case strings.HasSuffix(s.Space, ".credentials"):
 			id.passwd = []byte(s.FirstValue("passwd").First())
 		default:
 			id.display = s.FirstValue("displayName").First()
@@ -74,10 +78,10 @@ func (id *mercuryIdent) ToConfig() mercury.Config {
 			},
 		},
 		&mercury.Space{
-			Space: space + ".ident",
+			Space: space + identSFX,
 			List: []mercury.Value{
 				{
-					Space:  space + ".ident",
+					Space:  space + identSFX,
 					Seq:    1,
 					Name:   "passwd",
 					Values: []string{string(id.passwd)},
@@ -105,20 +109,38 @@ func NewMercury(r registry, pwd *ident.IDM) *mercurySource {
 }
 
 func (s *mercurySource) ReadIdent(r *http.Request) (ident.Ident, error) {
+	if id, err := s.readIdentBasic(r); id != nil {
+		return id, err
+	}
+
+	if id, err := s.readIdentURL(r); id != nil {
+		return id, err
+	}
+
+	if id, err := s.readIdentHTTP(r); id != nil {
+		return id, err
+	}
+
+	return nil, fmt.Errorf("no auth")
+}
+
+func (s *mercurySource) readIdentURL(r *http.Request) (ident.Ident, error) {
 	ctx, span := lg.Span(r.Context())
 	defer span.End()
 
-	if r.Method != http.MethodPost {
-		return nil, fmt.Errorf("method not allowed")
+	pass, ok := r.URL.User.Password()
+
+	if !ok {
+		return nil, nil
 	}
-	r.ParseForm()
+
 	id := &mercuryIdent{
-		identity: r.Form.Get("identity"),
-		passwd:   []byte(r.Form.Get("passwd")),
+		identity: r.URL.User.Username(),
+		passwd:   []byte(pass),
 	}
 
 	space := id.Space()
-	c, err := s.r.GetConfig(ctx, "trace:"+space+".ident", "", "")
+	c, err := s.r.GetConfig(ctx, "trace:"+space+identSFX, "", "")
 	if err != nil {
 		span.RecordError(err)
 		return id, err
@@ -144,6 +166,95 @@ func (s *mercurySource) ReadIdent(r *http.Request) (ident.Ident, error) {
 
 	return &current, nil
 }
+
+func (s *mercurySource) readIdentBasic(r *http.Request) (ident.Ident, error) {
+	ctx, span := lg.Span(r.Context())
+	defer span.End()
+
+	user, pass, ok := r.BasicAuth()
+
+	if !ok {
+		return nil, nil
+	}
+
+	id := &mercuryIdent{
+		identity: user,
+		passwd:   []byte(pass),
+	}
+
+	space := id.Space()
+	c, err := s.r.GetConfig(ctx, "trace:"+space+identSFX, "", "")
+	if err != nil {
+		span.RecordError(err)
+		return id, err
+	}
+	var current mercuryIdent
+	current.FromConfig(c)
+	if len(current.passwd) == 0 {
+		return nil, fmt.Errorf("not registered")
+	}
+	_, err = s.idm.Passwd(id.passwd, current.passwd)
+	if err != nil {
+		return id, err
+	}
+	current.SessionInfo, err = s.idm.NewSessionInfo()
+	if err != nil {
+		return id, err
+	}
+
+	err = s.r.WriteConfig(ctx, current.ToConfig())
+	if err != nil {
+		return &current, err
+	}
+
+	return &current, nil
+}
+
+func (s *mercurySource) readIdentHTTP(r *http.Request) (ident.Ident, error) {
+	ctx, span := lg.Span(r.Context())
+	defer span.End()
+
+	if r.Method != http.MethodPost {
+		return nil, fmt.Errorf("method not allowed")
+	}
+	r.ParseForm()
+	id := &mercuryIdent{
+		identity: r.Form.Get("identity"),
+		passwd:   []byte(r.Form.Get("passwd")),
+	}
+
+	if id.identity == "" {
+		return nil, nil
+	}
+
+	space := id.Space()
+	c, err := s.r.GetConfig(ctx, "trace:"+space+identSFX, "", "")
+	if err != nil {
+		span.RecordError(err)
+		return id, err
+	}
+	var current mercuryIdent
+	current.FromConfig(c)
+	if len(current.passwd) == 0 {
+		return nil, fmt.Errorf("not registered")
+	}
+	_, err = s.idm.Passwd(id.passwd, current.passwd)
+	if err != nil {
+		return id, err
+	}
+	current.SessionInfo, err = s.idm.NewSessionInfo()
+	if err != nil {
+		return id, err
+	}
+
+	err = s.r.WriteConfig(ctx, current.ToConfig())
+	if err != nil {
+		return &current, err
+	}
+
+	return &current, nil
+}
+
 func (s *mercurySource) RegisterIdent(ctx context.Context, identity, display string, passwd []byte) (ident.Ident, error) {
 	ctx, span := lg.Span(ctx)
 	defer span.End()

@@ -1,8 +1,10 @@
 package mercury
 
 import (
+	"embed"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"log"
 	"net/http"
 	"sort"
@@ -11,8 +13,8 @@ import (
 
 	"github.com/BurntSushi/toml"
 	"github.com/golang/gddo/httputil"
-	"go.sour.is/pkg/lg"
 	"go.sour.is/pkg/ident"
+	"go.sour.is/pkg/lg"
 )
 
 type root struct{}
@@ -21,14 +23,22 @@ func NewHTTP() *root {
 	return &root{}
 }
 
+//go:embed public
+var public embed.FS
+
 func (s *root) RegisterHTTP(mux *http.ServeMux) {
-	mux.Handle("/", http.FileServer(http.Dir("./mercury/public")))
+	// mux.Handle("/", http.FileServer(http.Dir("./mercury/public")))
+	public, _ := fs.Sub(public, "public")
+	mux.Handle("/", http.FileServerFS(public))
 }
 func (s *root) RegisterAPIv1(mux *http.ServeMux) {
 	mux.HandleFunc("GET /mercury", s.indexV1)
 	// mux.HandleFunc("/mercury/config", s.configV1)
 	mux.HandleFunc("GET /mercury/config", s.configV1)
 	mux.HandleFunc("POST /mercury/config", s.storeV1)
+}
+func (s *root) RegisterWellKnown(mux *http.ServeMux) {
+	s.RegisterAPIv1(mux)
 }
 
 func (s *root) configV1(w http.ResponseWriter, r *http.Request) {
@@ -62,7 +72,7 @@ func (s *root) configV1(w http.ResponseWriter, r *http.Request) {
 	log.Print("SPC:  ", space)
 	ns := ParseNamespace(space)
 	log.Print("PRE:  ", ns)
-	ns = rules.ReduceSearch(ns)
+	//ns = rules.ReduceSearch(ns)
 	log.Print("POST: ", ns)
 
 	lis, err := Registry.GetConfig(ctx, ns.String(), "", "")

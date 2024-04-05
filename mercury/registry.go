@@ -8,8 +8,8 @@ import (
 	"strconv"
 	"strings"
 
-	"go.sour.is/pkg/lg"
 	"go.sour.is/pkg/ident"
+	"go.sour.is/pkg/lg"
 	"go.sour.is/pkg/rsql"
 	"go.sour.is/pkg/set"
 	"golang.org/x/sync/errgroup"
@@ -122,16 +122,32 @@ func (r *registry) Register(name string, h func(*Space) any) {
 func (r *registry) Configure(m SpaceMap) error {
 	r.resetMatchers()
 	for space, c := range m {
-		space = strings.TrimPrefix(space, "mercury.source.")
-		handler, name, _ := strings.Cut(space, ".")
-		matches := c.FirstValue("match")
-		for _, match := range matches.Values {
-			ps := strings.Fields(match)
-			priority, err := strconv.Atoi(ps[0])
-			if err != nil {
-				return err
+		if strings.HasPrefix(space, "mercury.source.") {
+			space = strings.TrimPrefix(space, "mercury.source.")
+			handler, name, _ := strings.Cut(space, ".")
+			matches := c.FirstValue("match")
+			for _, match := range matches.Values {
+				ps := strings.Fields(match)
+				priority, err := strconv.Atoi(ps[0])
+				if err != nil {
+					return err
+				}
+				r.add(name, handler, ps[1], priority, c)
 			}
-			r.add(name, handler, ps[1], priority, c)
+		}
+
+		if strings.HasPrefix(space, "mercury.output.") {
+			space = strings.TrimPrefix(space, "mercury.output.")
+			handler, name, _ := strings.Cut(space, ".")
+			matches := c.FirstValue("match")
+			for _, match := range matches.Values {
+				ps := strings.Fields(match)
+				priority, err := strconv.Atoi(ps[0])
+				if err != nil {
+					return err
+				}
+				r.add(name, handler, ps[1], priority, c)
+			}
 		}
 	}
 
