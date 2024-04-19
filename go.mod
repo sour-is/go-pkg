@@ -61,7 +61,6 @@ require (
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.19.1 // indirect
 	github.com/oklog/ulid/v2 v2.1.0
 	github.com/prometheus/client_golang v1.18.0
-	github.com/tursodatabase/go-libsql v0.0.0-20240322134723-08771dcdd2f1
 	go.nhat.io/otelsql v0.12.0
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.48.0
 	go.opentelemetry.io/contrib/instrumentation/runtime v0.48.0
@@ -72,10 +71,10 @@ require (
 	go.opentelemetry.io/otel/trace v1.23.1
 	go.opentelemetry.io/proto/otlp v1.1.0 // indirect
 	golang.org/x/exp v0.0.0-20240213143201-ec583247a57a
-	golang.org/x/net v0.21.0 // indirect
-	golang.org/x/sys v0.17.0 // indirect
+	golang.org/x/net v0.23.0 // indirect
+	golang.org/x/sys v0.18.0 // indirect
 	golang.org/x/text v0.14.0 // indirect
 	google.golang.org/grpc v1.61.1 // indirect
-	google.golang.org/protobuf v1.32.0 // indirect
+	google.golang.org/protobuf v1.33.0 // indirect
 	modernc.org/sqlite v1.29.1
 )

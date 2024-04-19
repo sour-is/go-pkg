@@ -11,8 +11,8 @@ import (
 type DbColumns struct {
 	Cols  []string
 	index map[string]int
-	Table     string
-	View      string
+	Table string
+	View  string
 }
 
 // Col returns the mapped column names
@@ -40,16 +40,16 @@ func GetDbColumns(o interface{}) *DbColumns {
 	for i := 0; i < t.NumField(); i++ {
 		field := t.Field(i)
 
-		sp := append(strings.Split(field.Tag.Get("db"), ","), "")
-
-		tag := sp[0]
+		tag, _, _ := strings.Cut(field.Tag.Get("db"), ",")
 
 		json := field.Tag.Get("json")
+		json, _, _ = strings.Cut(json, ",")
 		if tag == "" {
 			tag = json
 		}
 
 		graphql := field.Tag.Get("graphql")
+		graphql, _, _ = strings.Cut(graphql, ",")
 		if tag == "" {
 			tag = graphql
 		}
@@ -87,4 +87,12 @@ func GetDbColumns(o interface{}) *DbColumns {
 		d.Cols = append(d.Cols, tag)
 	}
 	return &d
+}
+
+func QuoteCols(cols []string) []string {
+	lis := make([]string, len(cols))
+	for i := range cols {
+		lis[i] = `"` + cols[i] + `"`
+	}
+	return lis
 }

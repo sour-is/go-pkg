@@ -7,17 +7,17 @@ import (
 	"strings"
 	"time"
 
+	"go.sour.is/pkg/ident"
 	"go.sour.is/pkg/lg"
 	"go.sour.is/pkg/mercury"
-	"go.sour.is/pkg/ident"
 )
 
 const identNS = "ident."
 const identSFX = ".credentials"
 
 type registry interface {
-	GetIndex(ctx context.Context, match, search string) (c mercury.Config, err error)
-	GetConfig(ctx context.Context, match, search, fields string) (mercury.Config, error)
+	GetIndex(ctx context.Context, search mercury.Search) (c mercury.Config, err error)
+	GetConfig(ctx context.Context, search mercury.Search) (mercury.Config, error)
 	WriteConfig(ctx context.Context, spaces mercury.Config) error
 }
 
@@ -50,6 +50,7 @@ func (id *mercuryIdent) FromConfig(cfg mercury.Config) error {
 		switch {
 		case strings.HasSuffix(s.Space, ".credentials"):
 			id.passwd = []byte(s.FirstValue("passwd").First())
+			id.ed25519 = []byte(s.FirstValue("ed25519").First())
 		default:
 			id.display = s.FirstValue("displayName").First()
 		}
@@ -59,34 +60,29 @@ func (id *mercuryIdent) FromConfig(cfg mercury.Config) error {
 
 func (id *mercuryIdent) ToConfig() mercury.Config {
 	space := id.Space()
+	list := func(values ...mercury.Value) []mercury.Value { return values }
+	value := func(space string, seq uint64, name string, values ...string) mercury.Value {
+		return mercury.Value{
+			Space:  space,
+			Seq:    seq,
+			Name:   name,
+			Values: values,
+		}
+	}
 	return mercury.Config{
 		&mercury.Space{
 			Space: space,
-			List: []mercury.Value{
-				{
-					Space:  space,
-					Seq:    1,
-					Name:   "displayName",
-					Values: []string{id.display},
-				},
-				{
-					Space:  space,
-					Seq:    2,
-					Name:   "lastLogin",
-					Values: []string{time.UnixMilli(int64(id.Session().SessionID.Time())).Format(time.RFC3339)},
-				},
-			},
+			List: list(
+				value(space, 1, "displayName", id.display),
+				value(space, 2, "lastLogin", time.UnixMilli(int64(id.Session().SessionID.Time())).Format(time.RFC3339)),
+			),
 		},
 		&mercury.Space{
 			Space: space + identSFX,
-			List: []mercury.Value{
-				{
-					Space:  space + identSFX,
-					Seq:    1,
-					Name:   "passwd",
-					Values: []string{string(id.passwd)},
-				},
-			},
+			List: list(
+				value(space+identSFX, 1, "passwd", string(id.passwd)),
+				value(space+identSFX, 1, "ed25519", string(id.ed25519)),
+			),
 		},
 	}
 }
@@ -140,7 +136,7 @@ func (s *mercurySource) readIdentURL(r *http.Request) (ident.Ident, error) {
 	}
 
 	space := id.Space()
-	c, err := s.r.GetConfig(ctx, "trace:"+space+identSFX, "", "")
+	c, err := s.r.GetConfig(ctx, mercury.ParseSearch("trace:"+space+identSFX))
 	if err != nil {
 		span.RecordError(err)
 		return id, err
@@ -183,7 +179,7 @@ func (s *mercurySource) readIdentBasic(r *http.Request) (ident.Ident, error) {
 	}
 
 	space := id.Space()
-	c, err := s.r.GetConfig(ctx, "trace:"+space+identSFX, "", "")
+	c, err := s.r.GetConfig(ctx, mercury.ParseSearch("trace:"+space+identSFX))
 	if err != nil {
 		span.RecordError(err)
 		return id, err
@@ -228,7 +224,7 @@ func (s *mercurySource) readIdentHTTP(r *http.Request) (ident.Ident, error) {
 	}
 
 	space := id.Space()
-	c, err := s.r.GetConfig(ctx, "trace:"+space+identSFX, "", "")
+	c, err := s.r.GetConfig(ctx, mercury.ParseSearch("trace:"+space+identSFX))
 	if err != nil {
 		span.RecordError(err)
 		return id, err
@@ -260,9 +256,8 @@ func (s *mercurySource) RegisterIdent(ctx context.Context, identity, display str
 	defer span.End()
 
 	id := &mercuryIdent{identity: identity, display: display, passwd: passwd}
-	space := id.Space()
 
-	_, err := s.r.GetIndex(ctx, space, "")
+	_, err := s.r.GetIndex(ctx, mercury.ParseSearch( id.Space()))
 	if err != nil {
 		return nil, err
 	}

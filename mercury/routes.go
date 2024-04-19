@@ -70,12 +70,12 @@ func (s *root) configV1(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Print("SPC:  ", space)
-	ns := ParseNamespace(space)
+	ns := ParseSearch(space)
 	log.Print("PRE:  ", ns)
 	//ns = rules.ReduceSearch(ns)
 	log.Print("POST: ", ns)
 
-	lis, err := Registry.GetConfig(ctx, ns.String(), "", "")
+	lis, err := Registry.GetConfig(ctx, ns)
 	if err != nil {
 		http.Error(w, "ERR: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -250,11 +250,11 @@ func (s *root) indexV1(w http.ResponseWriter, r *http.Request) {
 		space = "*"
 	}
 
-	ns := ParseNamespace(space)
-	ns = rules.ReduceSearch(ns)
+	ns := ParseSearch(space)
+	ns.NamespaceSearch = rules.ReduceSearch(ns.NamespaceSearch)
 	span.AddEvent(ns.String())
 
-	lis, err := Registry.GetIndex(ctx, ns.String(), "")
+	lis, err := Registry.GetIndex(ctx, ns)
 	if err != nil {
 		span.RecordError(err)
 		http.Error(w, "ERR: "+err.Error(), http.StatusInternalServerError)

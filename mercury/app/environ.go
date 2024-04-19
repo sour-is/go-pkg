@@ -8,9 +8,8 @@ import (
 	"sort"
 	"strings"
 
-	"go.sour.is/pkg/mercury"
 	"go.sour.is/pkg/ident"
-	"go.sour.is/pkg/rsql"
+	"go.sour.is/pkg/mercury"
 	"go.sour.is/pkg/set"
 )
 
@@ -20,8 +19,9 @@ const (
 	mercuryHost     = "mercury.host"
 	appDotEnviron   = "mercury.environ"
 )
+
 var (
-	mercuryPolicy   = func(id string) string { return "mercury.@" + id + ".policy" }
+	mercuryPolicy = func(id string) string { return "mercury.@" + id + ".policy" }
 )
 
 func Register(name string, cfg mercury.SpaceMap) {
@@ -41,8 +41,13 @@ type mercuryEnviron struct {
 	lookup func(context.Context, ident.Ident) (mercury.Rules, error)
 }
 
+func getSearch(spec mercury.Search) mercury.NamespaceSearch {
+	return spec.NamespaceSearch
+}
+
 // Index returns nil
-func (app *mercuryEnviron) GetIndex(ctx context.Context, search mercury.NamespaceSearch, _ *rsql.Program) (lis mercury.Config, err error) {
+func (app *mercuryEnviron) GetIndex(ctx context.Context, spec mercury.Search) (lis mercury.Config, err error) {
+	search := getSearch(spec)
 
 	if search.Match(mercurySource) {
 		for _, s := range app.cfg.ToArray() {
@@ -74,7 +79,9 @@ func (app *mercuryEnviron) GetIndex(ctx context.Context, search mercury.Namespac
 }
 
 // Objects returns nil
-func (app *mercuryEnviron) GetConfig(ctx context.Context, search mercury.NamespaceSearch, _ *rsql.Program, _ []string) (lis mercury.Config, err error) {
+func (app *mercuryEnviron) GetConfig(ctx context.Context, spec mercury.Search) (lis mercury.Config, err error) {
+	search := getSearch(spec)
+
 	if search.Match(mercurySource) {
 		for _, s := range app.cfg.ToArray() {
 			if search.Match(s.Space) {

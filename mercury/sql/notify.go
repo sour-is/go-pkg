@@ -29,7 +29,7 @@ func (pgm *sqlHandler) GetNotify(ctx context.Context, event string) (lis mercury
 		Where(squirrel.Eq{"event": event}).
 		PlaceholderFormat(squirrel.Dollar).
 		RunWith(pgm.db).
-		QueryContext(context.TODO())
+		QueryContext(ctx)
 
 	if err != nil {
 		return nil, err

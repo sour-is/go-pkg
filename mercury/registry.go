@@ -3,6 +3,7 @@ package mercury
 import (
 	"context"
 	"fmt"
+	"log"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -10,16 +11,15 @@ import (
 
 	"go.sour.is/pkg/ident"
 	"go.sour.is/pkg/lg"
-	"go.sour.is/pkg/rsql"
 	"go.sour.is/pkg/set"
 	"golang.org/x/sync/errgroup"
 )
 
 type GetIndex interface {
-	GetIndex(context.Context, NamespaceSearch, *rsql.Program) (Config, error)
+	GetIndex(context.Context, Search) (Config, error)
 }
 type GetConfig interface {
-	GetConfig(context.Context, NamespaceSearch, *rsql.Program, []string) (Config, error)
+	GetConfig(context.Context, Search) (Config, error)
 }
 type WriteConfig interface {
 	WriteConfig(context.Context, Config) error
@@ -60,7 +60,7 @@ func (reg *registry) accessFilter(rules Rules, lis Config) (out Config, err erro
 // HandlerItem a single handler matching
 type matcher[T any] struct {
 	Name     string
-	Match    NamespaceSearch
+	Match    Search
 	Priority int
 	Handler  T
 }
@@ -122,17 +122,23 @@ func (r *registry) Register(name string, h func(*Space) any) {
 func (r *registry) Configure(m SpaceMap) error {
 	r.resetMatchers()
 	for space, c := range m {
+		log.Println("configure: ", space)
+
 		if strings.HasPrefix(space, "mercury.source.") {
 			space = strings.TrimPrefix(space, "mercury.source.")
 			handler, name, _ := strings.Cut(space, ".")
 			matches := c.FirstValue("match")
+			readonly := c.HasTag("readonly")
 			for _, match := range matches.Values {
 				ps := strings.Fields(match)
 				priority, err := strconv.Atoi(ps[0])
 				if err != nil {
 					return err
 				}
-				r.add(name, handler, ps[1], priority, c)
+				err = r.add(name, handler, strings.Join(ps[1:],"|"), priority, c, readonly)
+				if err != nil {
+					return err
+				}
 			}
 		}
 
@@ -146,7 +152,10 @@ func (r *registry) Configure(m SpaceMap) error {
 				if err != nil {
 					return err
 				}
-				r.add(name, handler, ps[1], priority, c)
+				err = r.add(name, handler, strings.Join(ps[1:],"|"), priority, c, false)
+				if err != nil {
+					return err
+				}
 			}
 		}
 	}
@@ -156,8 +165,8 @@ func (r *registry) Configure(m SpaceMap) error {
 }
 
 // Register add a handler to registry
-func (r *registry) add(name, handler, match string, priority int, cfg *Space) error {
-	// log.Infos("mercury regster", "match", match, "pri", priority)
+func (r *registry) add(name, handler, match string, priority int, cfg *Space, readonly bool) error {
+	log.Println("mercury regster", "match", match, "pri", priority)
 	mkHandler, ok := r.handlers[handler]
 	if !ok {
 		return fmt.Errorf("handler not registered: %s", handler)
@@ -173,61 +182,68 @@ func (r *registry) add(name, handler, match string, priority int, cfg *Space) er
 	if hdlr, ok := hdlr.(GetIndex); ok {
 		r.matchers.getIndex = append(
 			r.matchers.getIndex,
-			matcher[GetIndex]{Name: name, Match: ParseNamespace(match), Priority: priority, Handler: hdlr},
+			matcher[GetIndex]{Name: name, Match: ParseSearch(match), Priority: priority, Handler: hdlr},
 		)
 	}
 	if hdlr, ok := hdlr.(GetConfig); ok {
 		r.matchers.getConfig = append(
 			r.matchers.getConfig,
-			matcher[GetConfig]{Name: name, Match: ParseNamespace(match), Priority: priority, Handler: hdlr},
+			matcher[GetConfig]{Name: name, Match: ParseSearch(match), Priority: priority, Handler: hdlr},
 		)
 	}
 
-	if hdlr, ok := hdlr.(WriteConfig); ok {
+	if hdlr, ok := hdlr.(WriteConfig); !readonly && ok {
 
 		r.matchers.writeConfig = append(
 			r.matchers.writeConfig,
-			matcher[WriteConfig]{Name: name, Match: ParseNamespace(match), Priority: priority, Handler: hdlr},
+			matcher[WriteConfig]{Name: name, Match: ParseSearch(match), Priority: priority, Handler: hdlr},
 		)
 	}
 	if hdlr, ok := hdlr.(GetRules); ok {
 		r.matchers.getRules = append(
 			r.matchers.getRules,
-			matcher[GetRules]{Name: name, Match: ParseNamespace(match), Priority: priority, Handler: hdlr},
+			matcher[GetRules]{Name: name, Match: ParseSearch(match), Priority: priority, Handler: hdlr},
 		)
 	}
 	if hdlr, ok := hdlr.(GetNotify); ok {
 		r.matchers.getNotify = append(
 			r.matchers.getNotify,
-			matcher[GetNotify]{Name: name, Match: ParseNamespace(match), Priority: priority, Handler: hdlr},
+			matcher[GetNotify]{Name: name, Match: ParseSearch(match), Priority: priority, Handler: hdlr},
 		)
 	}
 	if hdlr, ok := hdlr.(SendNotify); ok {
 		r.matchers.sendNotify = append(
 			r.matchers.sendNotify,
-			matcher[SendNotify]{Name: name, Match: ParseNamespace(match), Priority: priority, Handler: hdlr},
+			matcher[SendNotify]{Name: name, Match: ParseSearch(match), Priority: priority, Handler: hdlr},
 		)
 	}
 
 	return nil
 }
 
-// GetIndex query each handler that match namespace.
-func (r *registry) GetIndex(ctx context.Context, match, search string) (c Config, err error) {
-	ctx, span := lg.Span(ctx)
-	defer span.End()
+func getMatches(search Search, matchers matchers) []Search {
+	matches := make([]Search, len(matchers.getIndex))
 
-	spec := ParseNamespace(match)
-	pgm := rsql.DefaultParse(search)
-	matches := make([]NamespaceSearch, len(r.matchers.getIndex))
-
-	for _, n := range spec {
-		for i, hdlr := range r.matchers.getIndex {
+	for _, n := range search.NamespaceSearch {
+		for i, hdlr := range matchers.getIndex {
 			if hdlr.Match.Match(n.Raw()) {
-				matches[i] = append(matches[i], n)
+				matches[i].NamespaceSearch = append(matches[i].NamespaceSearch, n)
+				matches[i].Count = search.Count
+				matches[i].Cursor = search.Cursor // need to decode cursor for the match
+				matches[i].Fields = search.Fields
+				matches[i].Find = search.Find
 			}
 		}
 	}
+	return matches
+}
+
+// GetIndex query each handler that match namespace.
+func (r *registry) GetIndex(ctx context.Context, search Search) (c Config, err error) {
+	ctx, span := lg.Span(ctx)
+	defer span.End()
+
+	matches := getMatches(search, r.matchers)
 
 	wg, ctx := errgroup.WithContext(ctx)
 	slots := make(chan Config, len(r.matchers.getConfig))
@@ -248,7 +264,7 @@ func (r *registry) GetIndex(ctx context.Context, match, search string) (c Config
 
 		wg.Go(func() error {
 			span.AddEvent(fmt.Sprintf("INDEX %s %s", hdlr.Name, hdlr.Match))
-			lis, err := hdlr.Handler.GetIndex(ctx, matches[i], pgm)
+			lis, err := hdlr.Handler.GetIndex(ctx, matches[i])
 			slots <- lis
 			return err
 		})
@@ -265,31 +281,19 @@ func (r *registry) GetIndex(ctx context.Context, match, search string) (c Config
 // Search query each handler with a key=value search
 
 // GetConfig query each handler that match for fully qualified namespaces.
-func (r *registry) GetConfig(ctx context.Context, match, search, fields string) (Config, error) {
+func (r *registry) GetConfig(ctx context.Context, search Search) (Config, error) {
 	ctx, span := lg.Span(ctx)
 	defer span.End()
 
-	spec := ParseNamespace(match)
-	pgm := rsql.DefaultParse(search)
-	flds := strings.Split(fields, ",")
-
-	matches := make([]NamespaceSearch, len(r.matchers.getConfig))
-
-	for _, n := range spec {
-		for i, hdlr := range r.matchers.getConfig {
-			if hdlr.Match.Match(n.Raw()) {
-				matches[i] = append(matches[i], n)
-			}
-		}
-	}
+	matches := getMatches(search, r.matchers)
 
 	m := make(SpaceMap)
 	for i, hdlr := range r.matchers.getConfig {
-		if len(matches[i]) == 0 {
+		if len(matches[i].NamespaceSearch) == 0 {
 			continue
 		}
 		span.AddEvent(fmt.Sprintf("QUERY %s %s", hdlr.Name, hdlr.Match))
-		lis, err := hdlr.Handler.GetConfig(ctx, matches[i], pgm, flds)
+		lis, err := hdlr.Handler.GetConfig(ctx, matches[i])
 		if err != nil {
 			return nil, err
 		}

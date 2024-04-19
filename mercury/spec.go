@@ -1,11 +1,33 @@
 package mercury
 
 import (
+	"log"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
-// NamespaceSpec implements a parsed namespace search
+// Search implements a parsed namespace search
+// It parses the input and generates an AST to inform the driver how to select values.
+// *                         => all spaces
+// mercury.*                 => all prefixed with `mercury.`
+// mercury.config            => only space `mercury.config`
+// mercury.source.*#readonly => all prefixed with `mercury.source.` AND has tag `readonly`
+// test.*|mercury.*          => all prefixed with `test.` AND `mercury.`
+// test.* find bin=eq=bar    => all prefixed with `test.` AND has an attribute bin that equals bar
+// test.* fields foo,bin     => all prefixed with `test.` only show fields foo and bin
+//   - count 20                => start a cursor with 20 results
+//   - count 20 after <cursor> => continue after cursor for 20 results
+//     cursor encodes start points for each of the matched sources
+type Search struct {
+	NamespaceSearch
+	Find   []ops
+	Fields []string
+	Count  uint64
+	Offset uint64
+	Cursor string
+}
+
 type NamespaceSpec interface {
 	Value() string
 	String() string
@@ -17,8 +39,10 @@ type NamespaceSpec interface {
 type NamespaceSearch []NamespaceSpec
 
 // ParseNamespace returns a list of parsed values
-func ParseNamespace(ns string) (lis NamespaceSearch) {
-	for _, part := range strings.Split(ns, ";") {
+func ParseSearch(text string) (search Search) {
+	ns, text, _ := strings.Cut(text, " ")
+	var lis NamespaceSearch
+	for _, part := range strings.Split(ns, "|") {
 		if strings.HasPrefix(part, "trace:") {
 			lis = append(lis, NamespaceTrace(part[6:]))
 		} else if strings.Contains(part, "*") {
@@ -26,6 +50,40 @@ func ParseNamespace(ns string) (lis NamespaceSearch) {
 		} else {
 			lis = append(lis, NamespaceNode(part))
 		}
+	}
+	search.NamespaceSearch = lis
+
+	field, text, next := strings.Cut(text, " ")
+	text = strings.TrimSpace(text)
+	for next {
+		switch strings.ToLower(field) {
+		case "find":
+			field, text, _ = strings.Cut(text, " ")
+			text = strings.TrimSpace(text)
+			search.Find = simpleParse(field)
+
+		case "fields":
+			field, text, _ = strings.Cut(text, " ")
+			text = strings.TrimSpace(text)
+			search.Fields = strings.Split(field, ",")
+
+		case "count":
+			field, text, _ = strings.Cut(text, " ")
+			text = strings.TrimSpace(text)
+			search.Count, _ = strconv.ParseUint(field, 10, 64)
+
+		case "offset":
+			field, text, _ = strings.Cut(text, " ")
+			text = strings.TrimSpace(text)
+			search.Offset, _ = strconv.ParseUint(field, 10, 64)
+
+		case "after":
+			field, text, _ = strings.Cut(text, " ")
+			text = strings.TrimSpace(text)
+			search.Cursor = field
+		}
+		field, text, next = strings.Cut(text, " ")
+		text = strings.TrimSpace(text)
 	}
 
 	return
@@ -116,4 +174,29 @@ func match(n NamespaceSpec, s string) bool {
 		return false
 	}
 	return ok
+}
+
+type ops struct {
+	Left  string
+	Op    string
+	Right string
+}
+
+func simpleParse(in string) (out []ops) {
+	items := strings.Split(in, ",")
+	for _, i := range items {
+		log.Println(i)
+		eq := strings.Split(i, "=")
+		switch len(eq) {
+		case 2:
+			out = append(out, ops{eq[0], "eq", eq[1]})
+		case 3:
+			if eq[1] == "" {
+				eq[1] = "eq"
+			}
+			out = append(out, ops{eq[0], eq[1], eq[2]})
+		}
+	}
+
+	return
 }

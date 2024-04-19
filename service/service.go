@@ -114,7 +114,6 @@ func (s *Harness) Run(ctx context.Context, appName, version string) error {
 	err := g.Wait()
 	if err != nil {
 		log.Printf("Shutdown due to error: %s", err)
-
 	}
 	return err
 }

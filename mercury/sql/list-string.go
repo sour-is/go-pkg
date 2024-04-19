@@ -43,9 +43,7 @@ func listScan(e *[]string, ends [2]rune) scanFn {
 			return nil
 		}
 
-		for _, s := range splitComma(string(str)) {
-			*e = append(*e, s)
-		}
+		*e = append(*e, splitComma(string(str))...)
 
 		return nil
 	}
