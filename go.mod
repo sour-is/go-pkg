@@ -1,6 +1,6 @@
 module go.sour.is/pkg
 
-go 1.22.0
+go 1.23.1
 
 require (
 	github.com/99designs/gqlgen v0.17.44
@@ -9,7 +9,7 @@ require (
 	github.com/matryer/is v1.4.1
 	github.com/ravilushqa/otelgqlgen v0.15.0
 	github.com/tursodatabase/go-libsql v0.0.0-20240322134723-08771dcdd2f1
-	github.com/vektah/gqlparser/v2 v2.5.11
+	github.com/vektah/gqlparser/v2 v2.5.14
 	go.opentelemetry.io/otel v1.23.1
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp v1.23.1
 	go.opentelemetry.io/otel/sdk/metric v1.23.1
@@ -54,6 +54,7 @@ require (
 	github.com/BurntSushi/toml v1.3.2
 	github.com/Masterminds/squirrel v1.5.4
 	github.com/cenkalti/backoff/v4 v4.2.1 // indirect
+	github.com/docopt/docopt-go v0.0.0-20180111231733-ee0de3bc6815
 	github.com/go-logr/logr v1.4.1 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/golang/gddo v0.0.0-20210115222349-20d68f94ee1f
