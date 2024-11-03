@@ -1,7 +1,5 @@
 package lsm2
 
-// [Sour.is|size] [size|hash][data][hash|flag|size]... [prev|count|flag|size]
-
 import (
 	"encoding/binary"
 	"errors"
@@ -10,6 +8,28 @@ import (
 	"io"
 	"iter"
 )
+
+// [Sour.is|size] [size|hash][data][hash|flag|size]... [prev|count|flag|size]
+
+// Commit1: [magic>|<end]{10} ... [<count][<size][<flag]{3..30}
+//                 +---------|--------------------------------> end = seek to end of file
+//                       <---|-------------+                    size = seek to magic header
+//                       <---|-------------+10                  size + 10 = seek to start of file
+//          <-----------------------------T+10----------------> 10 + size + trailer = full file size
+
+// Commit2: [magic>|<end]{10} ... [<count][<size][<flag]{3..30} ... [<prev][<count][<size][<flag]{4..40}
+//                           <---|---------+
+//                           <-------------+T----------------->
+//                  +--------|------------------------------------------------------------------------->
+//                           <-------------------------------------|----------------+
+//     prev = seek to last commit                              <---|-+
+//     prev + trailer = size of commit                         <----T+--------------------------------->
+
+// Block:  [hash>|<end]{10} ... [<size][<flag]{2..20}
+//               +---------|------------------------>  end = seek to end of block
+//                         <---|-+                     size = seek to end of header
+//         <-------------------|-+10                   size + 10 = seek to start of block
+//         <---------------------T+10--------------->  size + 10 + trailer = full block size
 
 const (
 	TypeUnknown uint64 = iota
@@ -39,39 +59,27 @@ type header struct {
 	extra []byte
 }
 
+// UnmarshalBinary implements encoding.BinaryUnmarshaler.
+// It decodes the input binary data into the header struct.
+// The function expects the input data to be of a specific size (headerSize),
+// otherwise it returns an error indicating bad data.
+// It reads the 'end' field from the binary data, updates the 'extra' field,
+// and reverses the byte order of 'extra' in place.
 func (h *header) UnmarshalBinary(data []byte) error {
-	if len(data) != 10 {
+	if len(data) != headerSize {
 		return fmt.Errorf("%w: bad data", ErrDecode)
 	}
-	h.extra = append(h.extra, data...)
 
-	var n int
-	h.end, n = binary.Uvarint(h.extra)
+	h.extra = make([]byte, headerSize)
+	copy(h.extra, data)
+
+	var bytesRead int
+	h.end, bytesRead = binary.Uvarint(h.extra)
 	reverse(h.extra)
-	h.extra = h.extra[:len(h.extra)-n]
+	h.extra = h.extra[:headerSize-bytesRead]
 
 	return nil
 }
-
-// Commit1: [magic>|<end]{10} ... [<count][<size][<flag]{3..30}
-//                 +---------|--------------------------------> end = seek to end of file
-//                       <---|-------------+                    size = seek to magic header
-//                       <---|-------------+10                  size + 10 = seek to start of file
-//          <-----------------------------T+10----------------> 10 + size + trailer = full file size
-
-// Commit2: [magic>|<end]{10} ... [<count][<size][<flag]{3..30} ... [<prev][<count][<size][<flag]{4..40}
-//                           <---|---------+
-//                           <-------------+T----------------->
-//                  +--------|------------------------------------------------------------------------->
-//                           <-------------------------------------|----------------+
-//     prev = seek to last commit                              <---|-+
-//     prev + trailer = size of commit                         <----T+--------------------------------->
-
-// Block:  [hash>|<end]{10} ... [<size][<flag]{2..20}
-//               +---------|------------------------>  end = seek to end of block
-//                         <---|-+                     size = seek to end of header
-//         <-------------------|-+10                   size + 10 = seek to start of block
-//         <---------------------T+10--------------->  size + 10 + trailer = full block size
 
 type Commit struct {
 	flag  uint64 // flag values
@@ -85,18 +93,18 @@ type Commit struct {
 // Append marshals the trailer into binary form and appends it to data.
 // It returns the new slice.
 func (h *Commit) AppendTrailer(data []byte) []byte {
-	h.flag |= TypePrevCommit
-	if h.prev == 0 {
-		h.flag &= TypeCommit
-	}
+	h.flag |= TypeCommit
+	// if h.prev > 0 {
+	// 	h.flag |= TypePrevCommit
+	// }
 
 	size := len(data)
 	data = binary.AppendUvarint(data, h.size)
 	data = binary.AppendUvarint(data, h.flag)
 	data = binary.AppendUvarint(data, h.count)
-	if h.prev != 0 {
-		data = binary.AppendUvarint(data, h.prev)
-	}
+	// if h.prev > 0 {
+	// 	data = binary.AppendUvarint(data, h.prev)
+	// }
 	reverse(data[size:])
 
 	return data
@@ -123,7 +131,7 @@ func (h *Commit) UnmarshalBinary(data []byte) error {
 	data = data[n:]
 	h.tsize += n
 
-	h.prev = h.size
+	// h.prev = h.size
 	if h.flag&TypePrevCommit == TypePrevCommit {
 		h.prev, n = binary.Uvarint(data)
 		h.tsize += n
@@ -207,9 +215,6 @@ func (h *logFile) AppendMagic(data []byte) []byte {
 
 	return data
 }
-func (h *logFile) UnmarshalBinary(data []byte) error {
-	return h.header.UnmarshalBinary(data)
-}
 
 // WriteLogFile writes a log file to w, given a list of segments.
 // The caller is responsible for calling WriteAt on the correct offset.
@@ -223,7 +228,7 @@ func (h *logFile) UnmarshalBinary(data []byte) error {
 //   - A footer with the length and hash of the segment
 //   - The contents of the segment
 //   - A header with the magic, version, flag (Clean), and end offset
-func WriteLogFile(w io.WriterAt, segments ...io.Reader) error {
+func WriteLogFile(w io.WriterAt, segments iter.Seq[io.Reader]) error {
 	_, err := w.WriteAt(Magic[:], 0)
 	if err != nil {
 		return err
@@ -233,13 +238,7 @@ func WriteLogFile(w io.WriterAt, segments ...io.Reader) error {
 		WriterAt: w,
 	}
 
-	return lf.writeIter(w, iter.Seq[io.Reader](func(yield func(io.Reader) bool) {
-		for _, s := range segments {
-			if !yield(s) {
-				return
-			}
-		}
-	}))
+	return lf.writeIter(segments)
 }
 
 type rw interface {
@@ -247,7 +246,7 @@ type rw interface {
 	io.WriterAt
 }
 
-func AppendLogFile(rw rw, segments ...io.Reader) error {
+func AppendLogFile(rw rw, segments iter.Seq[io.Reader]) error {
 	logFile, err := ReadLogFile(rw)
 	if err != nil {
 		return err
@@ -256,35 +255,19 @@ func AppendLogFile(rw rw, segments ...io.Reader) error {
 		WriterAt: rw,
 		logFile:  logFile.logFile,
 	}
-	return lf.writeIter(rw, iter.Seq[io.Reader](func(yield func(io.Reader) bool) {
-		for _, s := range segments {
-			if !yield(s) {
-				return
-			}
-		}
-	}))
-
+	return lf.writeIter( segments)
 }
 
-func WriteIter(w io.WriterAt, segments iter.Seq[io.Reader]) error {
-	_, err := w.WriteAt(Magic[:], 0)
-	if err != nil {
-		return err
-	}
 
-	lf := &LogWriter{
-		WriterAt: w,
-	}
-
-	return lf.writeIter(w, segments)
-}
-
-func (lf *LogWriter) writeIter(w io.WriterAt, segments iter.Seq[io.Reader]) error {
+func (lf *LogWriter) writeIter(segments iter.Seq[io.Reader]) error {	
+	lf.size = 0
 	for s := range segments {
-		err := lf.writeSegment(s)
+		n, err := lf.writeBlock(s)
 		if err != nil {
 			return err
 		}
+		lf.end += n
+		lf.size += n
 		lf.count++
 	}
 
@@ -297,7 +280,7 @@ func (lf *LogWriter) writeIter(w io.WriterAt, segments iter.Seq[io.Reader]) erro
 	}
 	lf.end += uint64(n)
 
-	_, err = w.WriteAt(lf.AppendMagic(make([]byte, 0, 10)), 0)
+	_, err = lf.WriteAt(lf.AppendMagic(make([]byte, 0, 10)), 0)
 
 	return err
 }
@@ -307,24 +290,26 @@ type LogWriter struct {
 	io.WriterAt
 }
 
-// writeSegment writes a segment to the log file at the current end of file position.
+// writeBlock writes a segment to the log file at the current end of file position.
 // The segment is written in chunks of 1024 bytes, and the hash of the segment
-func (lf *LogWriter) writeSegment(segment io.Reader) error {
+func (lf *LogWriter) writeBlock(segment io.Reader) (uint64, error) {
 	h := hash()
-	head := Block{}
+	block := Block{}
+
 	start := int64(lf.end) + 10
-	end := int64(lf.end) + 10
+	end := start
+	
+	bytesWritten := 0
 
 	// Write the header to the log file.
 	// The footer is written at the current end of file position.
 	n, err := lf.WriteAt(make([]byte, headerSize), start)
+	bytesWritten += n
+	end += int64(n)
 	if err != nil {
 		// If there is an error, return it.
-		return err
+		return uint64(bytesWritten), err
 	}
-	end += int64(n)
-	lf.size += uint64(n)
-	lf.end += uint64(n)
 
 	// Write the segment to the log file.
 	// The segment is written in chunks of 1024 bytes.
@@ -338,7 +323,7 @@ func (lf *LogWriter) writeSegment(segment io.Reader) error {
 				break
 			}
 			// If there is an error, return it.
-			return err
+			return uint64(bytesWritten), err
 		}
 
 		// Compute the hash of the chunk.
@@ -346,42 +331,41 @@ func (lf *LogWriter) writeSegment(segment io.Reader) error {
 
 		// Write the chunk to the log file.
 		// The chunk is written at the current end of file position.
-		_, err = lf.WriteAt(buf[:n], end)
+		n, err = lf.WriteAt(buf[:n], end)
+		bytesWritten += n
 		if err != nil {
 			// If there is an error, return it.
-			return err
+			return uint64(bytesWritten), err
 		}
 
 		// Update the length of the segment.
 		end += int64(n)
-		head.size += uint64(n)
+		block.size += uint64(n)
 	}
 
-	head.extra = h.Sum(nil)
-	head.end += head.size
+	block.extra = h.Sum(nil)
+	block.end += block.size
 
 	// Write the footer to the log file.
 	// The footer is written at the current end of file position.
-	n, err = lf.WriteAt(head.AppendTrailer(make([]byte, 0, maxBlockSize)), end)
+	n, err = lf.WriteAt(block.AppendTrailer(make([]byte, 0, maxBlockSize)), end)
+	bytesWritten += n
 	if err != nil {
 		// If there is an error, return it.
-		return err
+		return uint64(bytesWritten), err
 	}
 	end += int64(n)
-	head.end += uint64(n)
+	block.end += uint64(n)
 
 	// Update header to the log file.
 	// The footer is written at the current end of file position.
-	_, err = lf.WriteAt(head.AppendHeader(make([]byte, 0, headerSize)), start)
+	_, err = lf.WriteAt(block.AppendHeader(make([]byte, 0, headerSize)), start)
 	if err != nil {
 		// If there is an error, return it.
-		return err
+		return uint64(bytesWritten), err
 	}
 
-	// Update the end of file position.
-	lf.size += head.end
-	lf.end += head.end
-	return nil
+	return uint64(bytesWritten), nil
 }
 
 // reverse reverses a slice in-place.
@@ -446,16 +430,18 @@ func (lf *LogReader) Iter() iter.Seq2[uint64, io.Reader] {
 
 	return func(yield func(uint64, io.Reader) bool) {
 		start := int64(10)
+		var adj uint64
 		for _, commit := range commits {
-			size := int64(commit.prev)
+			size := int64(commit.size)
 			it := iterBlocks(io.NewSectionReader(lf, start, size), size)
 			for i, block := range it {
-				if !yield(i, block) {
+				if !yield(adj+i, block) {
 					return
 				}
 			}
 
 			start += size + int64(commit.tsize)
+			adj = commit.count
 		}
 	}
 }
@@ -464,9 +450,10 @@ func iterBlocks(r io.ReaderAt, end int64) iter.Seq2[uint64, io.Reader] {
 	var start int64
 	var i uint64
 	return func(yield func(uint64, io.Reader) bool) {
+		buf := make([]byte, maxBlockSize)
 		for start < end {
 			block := &Block{}
-			buf := make([]byte, 10)
+			buf = buf[:10]
 			n, err := rsr(r, int64(start), 10).ReadAt(buf, 0)
 			if n == 0 && err != nil {
 				return
@@ -476,8 +463,7 @@ func iterBlocks(r io.ReaderAt, end int64) iter.Seq2[uint64, io.Reader] {
 			if err := block.header.UnmarshalBinary(buf); err != nil {
 				return
 			}
-
-			buf = make([]byte, maxBlockSize)
+			buf = buf[:maxBlockSize]
 			n, err = rsr(r, int64(start), int64(block.end)).ReadAt(buf, 0)
 			if n == 0 && err != nil {
 				return
@@ -498,15 +484,12 @@ func iterBlocks(r io.ReaderAt, end int64) iter.Seq2[uint64, io.Reader] {
 	}
 }
 
-
 func (lf *LogReader) iterCommits() iter.Seq[Commit] {
-	eof := lf.end + 10
-
-	if eof <= 10 {
+	if lf.end == 0 {
 		return func(yield func(Commit) bool) {}
 	}
 
-	offset := eof - 10 - lf.prev - uint64(lf.tsize)
+	offset := lf.end - lf.size - uint64(lf.tsize)
 	return func(yield func(Commit) bool) {
 		if !yield(lf.Commit) {
 			return
@@ -529,50 +512,40 @@ func (lf *LogReader) iterCommits() iter.Seq[Commit] {
 			if !yield(commit) {
 				return
 			}
-			offset -= commit.prev + uint64(commit.tsize)
+			offset -= commit.size + uint64(commit.tsize)
 		}
 	}
 }
 
-// func (lf *LogReader) Rev() iter.Seq2[uint64, io.Reader] {
-// 	end := lf.end + 10
-// 	i := lf.count
-// 	return func(yield func(uint64, io.Reader) bool) {
+func (lf *LogReader) Rev() iter.Seq2[uint64, io.Reader] {
+	end := lf.end + 10
+	i := lf.count
+	return func(yield func(uint64, io.Reader) bool) {
 
-// 		for commit := range lf.iterCommits() {
-// 			end -= uint64(commit.tsize)
-// 			start := end - commit.prev - uint64(commit.tsize)
-// 			for start > end{
-// 				block := &Block{}
-// 				buf := make([]byte, min(maxBlockSize, commit.size))
-// 				n, err := lf.ReaderAt.ReadAt(buf, max(0, int64(end)-int64(len(buf))))
-// 				if n == 0 && err != nil {
-// 					lf.Err = err
-// 					return
-// 				}
-// 				buf = buf[:n]
-// 				err = block.UnmarshalBinary(buf)
-// 				if err != nil {
-// 					lf.Err = err
-// 					return
-// 				}
-// 				if !yield(i, io.NewSectionReader(lf, int64(end-block.size)-int64(block.tsize), int64(block.size))) {
-// 					return
-// 				}
-// 				end -= block.size + 10 + uint64(block.tsize)
-// 				i--
-// 			}
-
-// 		}
-// 	}
-// }
-
-func iterOne[I, T any](it iter.Seq2[I, T]) iter.Seq[T] {
-	return func(yield func(T) bool) {
-		for _, v := range it {
-			if !yield(v) {
-				return
+		for commit := range lf.iterCommits() {
+			end -= uint64(commit.tsize)
+			start := end - commit.size
+			for start < end {
+				block := &Block{}
+				buf := make([]byte, maxBlockSize)
+				n, err := rsr(lf, int64(start), int64(commit.size)).ReadAt(buf, 0)
+				if n == 0 && err != nil {
+					lf.Err = err
+					return
+				}
+				buf = buf[:n]
+				err = block.UnmarshalBinary(buf)
+				if err != nil {
+					lf.Err = err
+					return
+				}
+				if !yield(i-1, io.NewSectionReader(lf, int64(end-block.size)-int64(block.tsize), int64(block.size))) {
+					return
+				}
+				end -= block.size + 10 + uint64(block.tsize)
+				i--
 			}
+
 		}
 	}
 }
@@ -606,36 +579,3 @@ func (r *revSegmentReader) ReadAt(data []byte, offset int64) (int, error) {
 	reverse(data[:i])
 	return i, err
 }
-
-// rdr    : 0 1 2|3 4 5 6|7 8 9 10
-// rsr 6,4:       3 2 1 0
-//                      6
-//                ------- -4
-//                0 1 2 3
-// offset - size
-// rdr    : 0 1 2|3 4 5 6|7 8 9 10
-//                0 1 2 3
-// offset=0      |-------|        d[:4], o=3  3-0=3
-// offset=1     _|-----  |        d[:3], o=3  3-1=2
-// offset=2   ___|---    |        d[:2], o=3  3-2=1
-// offset=3 _____|-      |  	  d[:1], o=3  3-3=0
-// offset=4+_____|       |  	  d[:0], o=3  3-4=0
-
-// rdr    : 0 1 2|3 4 5 6|7 8 9 10
-// offset=0      |-------|        d[:4], o=0 -> 3
-// offset=0      |  -----|        d[:3], o=1 -> 4
-// offset=0      |    ---|        d[:2], o=2 -> 5
-// offset=0      |      -|        d[:1], o=3 -> 6
-// offset=0      |       |        d[:0], o=4+-> 7
-
-// rdr    : 0 1 2|3 4 5 6|7 8 9 10
-// offset=4   ___|       |        d[:0], o=0
-// offset=3     _|-      |        d[:1], o=0
-// offset=2      |---    |        d[:2], o=0
-// offset=1      |  ---  |        d[:2], o=1
-// offset=0      |    ---|        d[:2], o=2
-// offset=-1     |      -|_       d[:2], o=3
-// offset=-2     |       |___     d[:2], o=4+
-
-// o = max(0, offset - len)
-// d =

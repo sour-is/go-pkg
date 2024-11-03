@@ -4,14 +4,38 @@ import (
 	"bytes"
 	"encoding/base64"
 	"errors"
-	"fmt"
 	"io"
+	"iter"
+	"slices"
 	"testing"
 
 	"github.com/docopt/docopt-go"
 	"github.com/matryer/is"
 )
 
+// TestAppend tests AppendLogFile and WriteLogFile against a set of test cases.
+//
+// Each test case contains a slice of slices of io.Readers, which are passed to
+// AppendLogFile and WriteLogFile in order. The test case also contains the
+// expected encoded output as a base64 string, as well as the expected output
+// when the file is read back using ReadLogFile.
+//
+// The test case also contains the expected output when the file is read back in
+// reverse order using ReadLogFile.Rev().
+//
+// The test cases are as follows:
+//
+// - nil reader: Passes a nil slice of io.Readers to WriteLogFile.
+// - err reader: Passes a slice of io.Readers to WriteLogFile which returns an
+//   error when read.
+// - single reader: Passes a single io.Reader to WriteLogFile.
+// - multiple readers: Passes a slice of multiple io.Readers to WriteLogFile.
+// - multiple commit: Passes multiple slices of io.Readers to AppendLogFile.
+// - multiple commit 3x: Passes multiple slices of io.Readers to AppendLogFile
+//   three times.
+//
+// The test uses the is package from github.com/matryer/is to check that the
+// output matches the expected output.
 func TestAppend(t *testing.T) {
 	type test struct {
 		name string
@@ -22,40 +46,77 @@ func TestAppend(t *testing.T) {
 	}
 	tests := []test{
 		{
-			"nil reader",
-			nil,
-			"U291ci5pcwAAAwACAA",
-			[][]byte{},
-			[][]byte{},
+			name: "nil reader",
+			in:   nil,
+			enc:  "U291ci5pcwAAAwACAA",
+			out:  [][]byte{},
+			rev:  [][]byte{},
 		},
 		{
-			"single reader",
-			[][]io.Reader{
+			name: "err reader",
+			in:   nil,
+			enc:  "U291ci5pcwAAAwACAA",
+			out:  [][]byte{},
+			rev:  [][]byte{},
+		},
+		{
+			name: "single reader",
+			in: [][]io.Reader{
 				{
 					bytes.NewBuffer([]byte{1, 2, 3, 4})}},
-			"U291ci5pcwAAE756XndRZXhdAAYBAgMEAQQBAhA",
-			[][]byte{{1, 2, 3, 4}},
-			[][]byte{{1, 2, 3, 4}}},
+			enc: "U291ci5pcwAAE756XndRZXhdAAYBAgMEAQQBAhA",
+			out: [][]byte{{1, 2, 3, 4}},
+			rev: [][]byte{{1, 2, 3, 4}}},
 		{
-			"multiple readers",
-			[][]io.Reader{
+			name: "multiple readers",
+			in: [][]io.Reader{
 				{
 					bytes.NewBuffer([]byte{1, 2, 3, 4}),
 					bytes.NewBuffer([]byte{5, 6, 7, 8})}},
-			"U291ci5pcwAAI756XndRZXhdAAYBAgMEAQRhQyZWDDn5BQAGBQYHCAEEAgIg",
-			[][]byte{{1, 2, 3, 4}, {5, 6, 7, 8}},
-			[][]byte{{5, 6, 7, 8}, {1, 2, 3, 4}}},
+			enc: "U291ci5pcwAAI756XndRZXhdAAYBAgMEAQRhQyZWDDn5BQAGBQYHCAEEAgIg",
+			out: [][]byte{{1, 2, 3, 4}, {5, 6, 7, 8}},
+			rev: [][]byte{{5, 6, 7, 8}, {1, 2, 3, 4}}},
 		{
-			"multiple commit",
-			[][]io.Reader{
+			name: "multiple commit",
+			in: [][]io.Reader{
 				{
 					bytes.NewBuffer([]byte{1, 2, 3, 4})},
 				{
 					bytes.NewBuffer([]byte{5, 6, 7, 8})}},
-			"U291ci5pcwAAJ756XndRZXhdAAYBAgMEAQQBAhBhQyZWDDn5BQAGBQYHCAEEEAIDIA",
-			[][]byte{{1, 2, 3, 4}, {5, 6, 7, 8}},
-			[][]byte{{5, 6, 7, 8}, {1, 2, 3, 4}}},
-	}
+			enc: "U291ci5pcwAAJr56XndRZXhdAAYBAgMEAQQBAhBhQyZWDDn5BQAGBQYHCAEEAgIQ",
+			out: [][]byte{{1, 2, 3, 4}, {5, 6, 7, 8}},
+			rev: [][]byte{{5, 6, 7, 8}, {1, 2, 3, 4}}},
+		{
+			name: "multiple commit",
+			in: [][]io.Reader{
+				{
+					bytes.NewBuffer([]byte{1, 2, 3, 4}),
+					bytes.NewBuffer([]byte{5, 6, 7, 8})},
+				{
+					bytes.NewBuffer([]byte{9, 10, 11, 12})},
+			},
+			enc: "U291ci5pcwAANr56XndRZXhdAAYBAgMEAQRhQyZWDDn5BQAGBQYHCAEEAgIgA4Buuio8Ro0ABgkKCwwBBAMCEA",
+			out: [][]byte{{1, 2, 3, 4}, {5, 6, 7, 8}, {9, 10, 11, 12}},
+			rev: [][]byte{{9, 10, 11, 12}, {5, 6, 7, 8}, {1, 2, 3, 4}}},
+		{
+			name: "multiple commit 3x",
+			in: [][]io.Reader{
+				{
+					bytes.NewBuffer([]byte{1, 2, 3}),
+					bytes.NewBuffer([]byte{4, 5, 6}),
+				},
+				{
+					bytes.NewBuffer([]byte{7, 8, 9}),
+				},
+				{
+					bytes.NewBuffer([]byte{10, 11, 12}),
+					bytes.NewBuffer([]byte{13, 14, 15}),
+				},
+			},
+			enc: "U291ci5pcwAAVNCqYhhnLPWrAAUBAgMBA7axWhhYd+HsAAUEBQYBAwICHr9ryhhdbkEZAAUHCAkBAwMCDy/UIhidCwCqAAUKCwwBA/NCwhh6wXgXAAUNDg8BAwUCHg",
+			out: [][]byte{{1, 2, 3}, {4, 5, 6}, {7, 8, 9}, {10, 11, 12}, {13, 14, 15}},
+			rev: [][]byte{{13, 14, 15}, {10, 11, 12}, {7, 8, 9}, {4, 5, 6}, {1, 2, 3}}},
+	}	
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -65,17 +126,17 @@ func TestAppend(t *testing.T) {
 			buffers := 0
 
 			if len(test.in) == 0 {
-				err := WriteLogFile(buf)
+				err := WriteLogFile(buf, slices.Values([]io.Reader{}))
 				is.NoErr(err)
 			}
 			for i, in := range test.in {
 				buffers += len(in)
 
 				if i == 0 {
-					err := WriteLogFile(buf, in...)
+					err := WriteLogFile(buf, slices.Values(in))
 					is.NoErr(err)
 				} else {
-					err := AppendLogFile(buf, in...)
+					err := AppendLogFile(buf, slices.Values(in))
 					is.NoErr(err)
 				}
 			}
@@ -86,47 +147,52 @@ func TestAppend(t *testing.T) {
 			is.NoErr(err)
 
 			i := 0
-			for fp := range iterOne(files.Iter()) {
+			for j, fp := range files.Iter() {
 				buf, err := io.ReadAll(fp)
 				is.NoErr(err)
 
-				is.Equal(buf, test.out[i])
+				is.True(len(test.out) > int(j))
+				is.Equal(buf, test.out[j])
 				i++
 			}
 			is.NoErr(files.Err)
 			is.Equal(i, buffers)
 
-			// i = 0
-			// for fp := range iterOne(files.Rev()) {
-			// 	buf, err := io.ReadAll(fp)
-			// 	is.NoErr(err)
+			i = 0
+			for j, fp := range files.Rev() {
+				buf, err := io.ReadAll(fp)
+				is.NoErr(err)
 
-			// 	is.Equal(buf, test.rev[i])
-			// 	i++
-			// }
-			// is.NoErr(files.Err)
-			// is.Equal(i, buffers)
+				is.Equal(buf, test.rev[i])
+				is.Equal(buf, test.out[j])
+				i++
+			}
+			is.NoErr(files.Err)
+			is.Equal(i, buffers)
 
 		})
 	}
 }
 
+// TestArgs tests that the CLI arguments are correctly parsed.
 func TestArgs(t *testing.T) {
 	is := is.New(t)
-	usage := `Usage: lsm2 create <archive> <files>...
-	`
-	opts, err := docopt.ParseArgs(usage, []string{"create", "archive", "file1", "file2"}, "1.0")
+	usage := `Usage: lsm2 create <archive> <files>...`
+
+	arguments, err := docopt.ParseArgs(usage, []string{"create", "archive", "file1", "file2"}, "1.0")
 	is.NoErr(err)
 
-	args := struct {
+	var params struct {
 		Create  bool     `docopt:"create"`
 		Archive string   `docopt:"<archive>"`
 		Files   []string `docopt:"<files>"`
-	}{}
-	err = opts.Bind(&args)
+	}
+	err = arguments.Bind(&params)
 	is.NoErr(err)
-	fmt.Println(args)
 
+	is.Equal(params.Create, true)
+	is.Equal(params.Archive, "archive")
+	is.Equal(params.Files, []string{"file1", "file2"})
 }
 
 type buffer struct {
@@ -155,6 +221,10 @@ func (b *buffer) WriteAt(data []byte, offset int64) (written int, err error) {
 	return
 }
 
+// ReadAt implements io.ReaderAt. It reads data from the internal buffer starting
+// from the specified offset and writes it into the provided data slice. If the
+// offset is negative, it returns an error. If the requested read extends beyond
+// the buffer's length, it returns the data read so far along with an io.EOF error.
 func (b *buffer) ReadAt(data []byte, offset int64) (int, error) {
 	if offset < 0 {
 		return 0, errors.New("negative offset")
@@ -165,4 +235,18 @@ func (b *buffer) ReadAt(data []byte, offset int64) (int, error) {
 	}
 
 	return copy(data, b.buf[offset:]), nil
+}
+
+// IterOne takes an iterator that yields values of type T along with a value of
+// type I, and returns an iterator that yields only the values of type T. It
+// discards the values of type I.
+func IterOne[I, T any](it iter.Seq2[I, T]) iter.Seq[T] {
+	return func(yield func(T) bool) {
+		for i, v := range it {
+			_ = i
+			if !yield(v) {
+				return
+			}
+		}
+	}
 }
