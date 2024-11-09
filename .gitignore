@@ -1,3 +1,4 @@
 test.db
 *.mercury
 sour.is-mercury
+.vscode/

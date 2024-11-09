@@ -1,327 +1,300 @@
-// SPDX-FileCopyrightText: 2023 Jon Lundy <jon@xuu.cc>
-// SPDX-License-Identifier: BSD-3-Clause
-
 package lsm
 
 import (
 	"bytes"
-	crand "crypto/rand"
 	"encoding/base64"
+	"errors"
 	"io"
-	"io/fs"
-	"math/rand"
-	"os"
-	"sort"
-	"sync"
+	"iter"
+	"slices"
 	"testing"
-	"time"
 
+	"github.com/docopt/docopt-go"
 	"github.com/matryer/is"
 )
 
-func TestLargeFile(t *testing.T) {
-	is := is.New(t)
-
-	segCount := 4098
-
-	f := randFile(t, 2_000_000, segCount)
-
-	sf, err := ReadFile(f)
-	is.NoErr(err)
-
-	is.True(len(sf.segments) <= segCount)
-	var needle []byte
-	for i, s := range sf.segments {
-		e, err := s.FirstEntry()
-		is.NoErr(err)
-		k, v := e.KeyValue()
-		needle = k
-		t.Logf("Segment-%d: %s = %d", i, k, v)
+// TestWriteLogFile tests AppendLogFile and WriteLogFile against a set of test cases.
+//
+// Each test case contains a slice of slices of io.Readers, which are passed to
+// AppendLogFile and WriteLogFile in order. The test case also contains the
+// expected encoded output as a base64 string, as well as the expected output
+// when the file is read back using ReadLogFile.
+//
+// The test case also contains the expected output when the file is read back in
+// reverse order using ReadLogFile.Rev().
+//
+// The test cases are as follows:
+//
+// - nil reader: Passes a nil slice of io.Readers to WriteLogFile.
+// - err reader: Passes a slice of io.Readers to WriteLogFile which returns an
+//   error when read.
+// - single reader: Passes a single io.Reader to WriteLogFile.
+// - multiple readers: Passes a slice of multiple io.Readers to WriteLogFile.
+// - multiple commit: Passes multiple slices of io.Readers to AppendLogFile.
+// - multiple commit 3x: Passes multiple slices of io.Readers to AppendLogFile
+//   three times.
+//
+// The test uses the is package from github.com/matryer/is to check that the
+// output matches the expected output.
+func TestWriteLogFile(t *testing.T) {
+	type test struct {
+		name string
+		in   [][]io.Reader
+		enc  string
+		out  [][]byte
+		rev  [][]byte
 	}
-	t.Log(f.Stat())
-
-	tt, ok, err := sf.Find(needle, true)
-	is.NoErr(err)
-	is.True(ok)
-	key, val := tt.KeyValue()
-	t.Log(string(key), val)
-
-	tt, ok, err = sf.Find([]byte("needle"), false)
-	is.NoErr(err)
-	is.True(!ok)
-	key, val = tt.KeyValue()
-	t.Log(string(key), val)
-
-	tt, ok, err = sf.Find([]byte{'\xff'}, false)
-	is.NoErr(err)
-	is.True(!ok)
-	key, val = tt.KeyValue()
-	t.Log(string(key), val)
-}
-
-func TestLargeFileDisk(t *testing.T) {
-	is := is.New(t)
-
-	segCount := 4098
-
-	t.Log("generate large file")
-	f := randFile(t, 2_000_000, segCount)
-
-	fd, err := os.CreateTemp("", "sst*")
-	is.NoErr(err)
-	defer func() { t.Log("cleanup:", fd.Name()); fd.Close(); os.Remove(fd.Name()) }()
-
-	t.Log("write file:", fd.Name())
-	_, err = io.Copy(fd, f)
-	is.NoErr(err)
-	fd.Seek(0, 0)
-
-	sf, err := ReadFile(fd)
-	is.NoErr(err)
-
-	is.True(len(sf.segments) <= segCount)
-	var needle []byte
-	for i, s := range sf.segments {
-		e, err := s.FirstEntry()
-		is.NoErr(err)
-		k, v := e.KeyValue()
-		needle = k
-
-		ok, err := s.VerifyHash()
-		is.NoErr(err)
-
-		t.Logf("Segment-%d: %s = %d %t", i, k, v, ok)
-		is.True(ok)
-	}
-	t.Log(f.Stat())
-
-	tt, ok, err := sf.Find(needle, false)
-	is.NoErr(err)
-	is.True(ok)
-	key, val := tt.KeyValue()
-	t.Log(string(key), val)
-
-	tt, ok, err = sf.Find([]byte("needle"), false)
-	is.NoErr(err)
-	is.True(!ok)
-	key, val = tt.KeyValue()
-	t.Log(string(key), val)
-
-	tt, ok, err = sf.Find([]byte{'\xff'}, false)
-	is.NoErr(err)
-	is.True(!ok)
-	key, val = tt.KeyValue()
-	t.Log(string(key), val)
-}
-
-func BenchmarkLargeFile(b *testing.B) {
-	segCount := 4098 / 4
-	f := randFile(b, 2_000_000, segCount)
-
-	sf, err := ReadFile(f)
-	if err != nil {
-		b.Error(err)
-	}
-	key := make([]byte, 5)
-	keys := make([][]byte, b.N)
-	for i := range keys {
-		_, err = crand.Read(key)
-		if err != nil {
-			b.Error(err)
-		}
-		keys[i] = []byte(base64.RawURLEncoding.EncodeToString(key))
-	}
-	b.Log("ready", b.N)
-	b.ResetTimer()
-	okays := 0
-	each := b.N / 10
-	for n := 0; n < b.N; n++ {
-		if each > 0 && n%each == 0 {
-			b.Log(n)
-		}
-		_, ok, err := sf.Find(keys[n], false)
-		if err != nil {
-			b.Error(err)
-		}
-		if ok {
-			okays++
-		}
-	}
-	b.Log("okays=", b.N, okays)
-}
-
-// TestFindRange is an initial range find for start and stop of a range of needles.
-// TODO: start the second query from where the first left off. Use an iterator?
-func TestFindRange(t *testing.T) {
-	is := is.New(t)
-
-	f := basicFile(t, 
-		entries{
-			{"AD", 5},
-			{"AC", 5},
-			{"AB", 4},
-			{"AB", 3},
+	tests := []test{
+		{
+			name: "nil reader",
+			in:   nil,
+			enc:  "U291ci5pcwAAAwACAA",
+			out:  [][]byte{},
+			rev:  [][]byte{},
 		},
-		entries{
-			{"AB", 2},
-			{"AA", 1},
+		{
+			name: "err reader",
+			in:   nil,
+			enc:  "U291ci5pcwAAAwACAA",
+			out:  [][]byte{},
+			rev:  [][]byte{},
 		},
-	)
-	sf, err := ReadFile(f)
-	is.NoErr(err)
+		{
+			name: "single reader",
+			in: [][]io.Reader{
+				{
+					bytes.NewBuffer([]byte{1, 2, 3, 4})}},
+			enc: "U291ci5pcwAAE756XndRZXhdAAYBAgMEAQQBAhA",
+			out: [][]byte{{1, 2, 3, 4}},
+			rev: [][]byte{{1, 2, 3, 4}}},
+		{
+			name: "multiple readers",
+			in: [][]io.Reader{
+				{
+					bytes.NewBuffer([]byte{1, 2, 3, 4}),
+					bytes.NewBuffer([]byte{5, 6, 7, 8})}},
+			enc: "U291ci5pcwAAI756XndRZXhdAAYBAgMEAQRhQyZWDDn5BQAGBQYHCAEEAgIg",
+			out: [][]byte{{1, 2, 3, 4}, {5, 6, 7, 8}},
+			rev: [][]byte{{5, 6, 7, 8}, {1, 2, 3, 4}}},
+		{
+			name: "multiple commit",
+			in: [][]io.Reader{
+				{
+					bytes.NewBuffer([]byte{1, 2, 3, 4})},
+				{
+					bytes.NewBuffer([]byte{5, 6, 7, 8})}},
+			enc: "U291ci5pcwAAJr56XndRZXhdAAYBAgMEAQQBAhBhQyZWDDn5BQAGBQYHCAEEAgIQ",
+			out: [][]byte{{1, 2, 3, 4}, {5, 6, 7, 8}},
+			rev: [][]byte{{5, 6, 7, 8}, {1, 2, 3, 4}}},
+		{
+			name: "multiple commit",
+			in: [][]io.Reader{
+				{
+					bytes.NewBuffer([]byte{1, 2, 3, 4}),
+					bytes.NewBuffer([]byte{5, 6, 7, 8})},
+				{
+					bytes.NewBuffer([]byte{9, 10, 11, 12})},
+			},
+			enc: "U291ci5pcwAANr56XndRZXhdAAYBAgMEAQRhQyZWDDn5BQAGBQYHCAEEAgIgA4Buuio8Ro0ABgkKCwwBBAMCEA",
+			out: [][]byte{{1, 2, 3, 4}, {5, 6, 7, 8}, {9, 10, 11, 12}},
+			rev: [][]byte{{9, 10, 11, 12}, {5, 6, 7, 8}, {1, 2, 3, 4}}},
+		{
+			name: "multiple commit 3x",
+			in: [][]io.Reader{
+				{
+					bytes.NewBuffer([]byte{1, 2, 3}),
+					bytes.NewBuffer([]byte{4, 5, 6}),
+				},
+				{
+					bytes.NewBuffer([]byte{7, 8, 9}),
+				},
+				{
+					bytes.NewBuffer([]byte{10, 11, 12}),
+					bytes.NewBuffer([]byte{13, 14, 15}),
+				},
+			},
+			enc: "U291ci5pcwAAVNCqYhhnLPWrAAUBAgMBA7axWhhYd+HsAAUEBQYBAwICHr9ryhhdbkEZAAUHCAkBAwMCDy/UIhidCwCqAAUKCwwBA/NCwhh6wXgXAAUNDg8BAwUCHg",
+			out: [][]byte{{1, 2, 3}, {4, 5, 6}, {7, 8, 9}, {10, 11, 12}, {13, 14, 15}},
+			rev: [][]byte{{13, 14, 15}, {10, 11, 12}, {7, 8, 9}, {4, 5, 6}, {1, 2, 3}}},
+	}	
 
-	var ok bool
-	var first, last  *entryBytes
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			is := is.New(t)
+			buf := &buffer{}
 
-	first, ok, err = sf.Find([]byte("AB"), true)
-	is.NoErr(err)
+			buffers := 0
 
-	key, val := first.KeyValue()
-	t.Log(string(key), val)
+			if len(test.in) == 0 {
+				err := WriteLogFile(buf, slices.Values([]io.Reader{}))
+				is.NoErr(err)
+			}
+			for i, in := range test.in {
+				buffers += len(in)
 
-	is.True(ok)
-	is.Equal(key, []byte("AB"))
-	is.Equal(val, uint64(2))
+				if i == 0 {
+					err := WriteLogFile(buf, slices.Values(in))
+					is.NoErr(err)
+				} else {
+					err := AppendLogFile(buf, slices.Values(in))
+					is.NoErr(err)
+				}
+			}
+			
+			is.Equal(base64.RawStdEncoding.EncodeToString(buf.Bytes()), test.enc)
 
-	last, ok, err = sf.Find([]byte("AB"), false)
-	is.NoErr(err)
+			files, err := ReadLogFile(bytes.NewReader(buf.Bytes()))
+			is.NoErr(err)
 
-	key, val = last.KeyValue()
-	t.Log(string(key), val)
+			is.Equal(files.Size(), uint64(len(buf.Bytes())))
 
-	is.True(ok)
-	is.Equal(key, []byte("AB"))
-	is.Equal(val, uint64(4))
+			i := 0
+			for bi, fp := range files.Iter(0) {
+				buf, err := io.ReadAll(fp)
+				is.NoErr(err)
 
+				hash := hash()
+				hash.Write(buf)
+				is.Equal(bi.Hash, hash.Sum(nil)[:len(bi.Hash)])
 
-	last, ok, err = sf.Find([]byte("AC"), false)
-	is.NoErr(err)
+				is.True(len(test.out) > int(bi.Index))
+				is.Equal(buf, test.out[bi.Index])
+				i++
+			}
+			is.NoErr(files.Err)
+			is.Equal(i, buffers)
 
-	key, val = last.KeyValue()
-	t.Log(string(key), val)
+			i = 0
+			for bi, fp := range files.Rev(files.Count()) {
+				buf, err := io.ReadAll(fp)
+				is.NoErr(err)
 
-	is.True(ok)
-	is.Equal(key, []byte("AC"))
-	is.Equal(val, uint64(5))
+				hash := hash()
+				hash.Write(buf)
+				is.Equal(bi.Hash, hash.Sum(nil)[:len(bi.Hash)])
+
+				is.Equal(buf, test.rev[i])
+				is.Equal(buf, test.out[bi.Index])
+				i++
+			}
+			is.NoErr(files.Err)
+			is.Equal(i, buffers)
+			is.Equal(files.Count(), uint64(i))
+		})
+	}
 }
 
-func randFile(t interface {
-	Helper()
-	Error(...any)
-}, size int, segments int) fs.File {
-	t.Helper()
+// TestArgs tests that the CLI arguments are correctly parsed.
+func TestArgs(t *testing.T) {
+	is := is.New(t)
+	usage := `Usage: lsm2 create <archive> <files>...`
 
-	lis := make(listEntries, size)
-	for i := range lis {
-		key := make([]byte, 5)
-		_, err := crand.Read(key)
-		if err != nil {
-			t.Error(err)
+	arguments, err := docopt.ParseArgs(usage, []string{"create", "archive", "file1", "file2"}, "1.0")
+	is.NoErr(err)
+
+	var params struct {
+		Create  bool     `docopt:"create"`
+		Archive string   `docopt:"<archive>"`
+		Files   []string `docopt:"<files>"`
+	}
+	err = arguments.Bind(&params)
+	is.NoErr(err)
+
+	is.Equal(params.Create, true)
+	is.Equal(params.Archive, "archive")
+	is.Equal(params.Files, []string{"file1", "file2"})
+}
+
+func BenchmarkIterate(b *testing.B) {
+	block := make([]byte, 1024)
+	buf := &buffer{}
+
+
+	b.Run("write", func(b *testing.B) {
+		WriteLogFile(buf, func(yield func(io.Reader) bool) {
+			for range (b.N) {
+				if !yield(bytes.NewBuffer(block)) {
+					break	
+				}	
+			}
+		})
+	})
+
+	b.Run("read", func(b *testing.B) {
+		lf, _ := ReadLogFile(buf)
+		b.Log(lf.Count())
+		for range (b.N) {
+			for _, fp := range lf.Iter(0) {
+				_, _ = io.Copy(io.Discard, fp)
+				break
+			}
 		}
-		key = []byte(base64.RawURLEncoding.EncodeToString(key))
-		// key := []byte(fmt.Sprintf("key-%05d", i))
+	})
 
-		lis[i] = NewKeyValue(key, rand.Uint64()%16_777_216)
-	}
-
-	sort.Sort(sort.Reverse(&lis))
-	each := size / segments
-	if size%segments != 0 {
-		each++
-	}
-	split := make([]listEntries, segments)
-
-	for i := range split {
-		if (i+1)*each > len(lis) {
-			split[i] = lis[i*each : i*each+len(lis[i*each:])]
-			split = split[:i+1]
-			break
+	b.Run("rev", func(b *testing.B) {
+		lf, _ := ReadLogFile(buf)
+		b.Log(lf.Count())
+		for range (b.N) {
+			for _, fp := range lf.Rev(lf.Count()) {
+				_, _ = io.Copy(io.Discard, fp)
+				break
+			}
 		}
-		split[i] = lis[i*each : (i+1)*each]
+	})
+}
+
+type buffer struct {
+	buf []byte
+}
+
+// Bytes returns the underlying byte slice of the bufferWriterAt.
+func (b *buffer) Bytes() []byte {
+	return b.buf
+}
+
+// WriteAt implements io.WriterAt. It appends data to the internal buffer
+// if the offset is beyond the current length of the buffer. It will
+// return an error if the offset is negative.
+func (b *buffer) WriteAt(data []byte, offset int64) (written int, err error) {
+	if offset < 0 {
+		return 0, errors.New("negative offset")
 	}
 
-	var b bytes.Buffer
-	for _, s := range split {
-		s.WriteTo(&b)
+	currentLength := int64(len(b.buf))
+	if currentLength < offset+int64(len(data)) {
+		b.buf = append(b.buf, make([]byte, offset+int64(len(data))-currentLength)...)
 	}
 
-	return NewFile(b.Bytes())
+	written = copy(b.buf[offset:], data)
+	return
 }
 
-type fakeStat struct {
-	size int64
-}
-
-// IsDir implements fs.FileInfo.
-func (*fakeStat) IsDir() bool {
-	panic("unimplemented")
-}
-
-// ModTime implements fs.FileInfo.
-func (*fakeStat) ModTime() time.Time {
-	panic("unimplemented")
-}
-
-// Mode implements fs.FileInfo.
-func (*fakeStat) Mode() fs.FileMode {
-	panic("unimplemented")
-}
-
-// Name implements fs.FileInfo.
-func (*fakeStat) Name() string {
-	panic("unimplemented")
-}
-
-// Size implements fs.FileInfo.
-func (s *fakeStat) Size() int64 {
-	return s.size
-}
-
-// Sys implements fs.FileInfo.
-func (*fakeStat) Sys() any {
-	panic("unimplemented")
-}
-
-var _ fs.FileInfo = (*fakeStat)(nil)
-
-type rd interface {
-	io.ReaderAt
-	io.Reader
-}
-type fakeFile struct {
-	stat func() fs.FileInfo
-
-	rd
-}
-
-func (fakeFile) Close() error                 { return nil }
-func (f fakeFile) Stat() (fs.FileInfo, error) { return f.stat(), nil }
-
-func NewFile(b ...[]byte) fs.File {
-	in := bytes.Join(b, nil)
-	rd := bytes.NewReader(in)
-	size := int64(len(in))
-	return &fakeFile{stat: func() fs.FileInfo { return &fakeStat{size: size} }, rd: rd}
-}
-func NewFileFromReader(rd *bytes.Reader) fs.File {
-	return &fakeFile{stat: func() fs.FileInfo { return &fakeStat{size: int64(rd.Len())} }, rd: rd}
-}
-
-type fakeFS struct {
-	files map[string]*fakeFile
-	mu    sync.RWMutex
-}
-
-// Open implements fs.FS.
-func (f *fakeFS) Open(name string) (fs.File, error) {
-	f.mu.RLock()
-	defer f.mu.RUnlock()
-
-	if file, ok := f.files[name]; ok {
-		return file, nil
+// ReadAt implements io.ReaderAt. It reads data from the internal buffer starting
+// from the specified offset and writes it into the provided data slice. If the
+// offset is negative, it returns an error. If the requested read extends beyond
+// the buffer's length, it returns the data read so far along with an io.EOF error.
+func (b *buffer) ReadAt(data []byte, offset int64) (int, error) {
+	if offset < 0 {
+		return 0, errors.New("negative offset")
 	}
 
-	return nil, fs.ErrNotExist
+	if offset > int64(len(b.buf)) || len(b.buf[offset:]) < len(data) {
+		return copy(data, b.buf[offset:]), io.EOF
+	}
+
+	return copy(data, b.buf[offset:]), nil
 }
 
-var _ fs.FS = (*fakeFS)(nil)
+// IterOne takes an iterator that yields values of type T along with a value of
+// type I, and returns an iterator that yields only the values of type T. It
+// discards the values of type I.
+func IterOne[I, T any](it iter.Seq2[I, T]) iter.Seq[T] {
+	return func(yield func(T) bool) {
+		for i, v := range it {
+			_ = i
+			if !yield(v) {
+				return
+			}
+		}
+	}
+}
