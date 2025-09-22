@@ -160,3 +160,35 @@ func Align[T any](k []T, v []T, less func(T, T) bool) []Pair[*T, *T] {
 	return lis
 
 }
+
+func Heapify[T any](arr []T, n, i int, less func(T, T) bool) {
+	largest := i
+	l := 2*i + 1
+	r := 2*i + 2
+
+	if l < n && less(arr[largest], arr[l]) {
+		largest = l
+	}
+	if r < n && less(arr[largest], arr[r]) {
+		largest = r
+	}
+	if largest != i {
+		arr[i], arr[largest] = arr[largest], arr[i]
+		Heapify(arr, n, largest, less)
+	}
+}
+
+func BuildMaxHeap[T any](arr []T, less func(T, T) bool) {
+	n := len(arr)
+	for i := (n / 2) - 1; i >= 0; i-- {
+		Heapify(arr, n, i, less)
+	}
+}
+
+func HeapSort[T any](arr []T, less func(T, T) bool) {
+	BuildMaxHeap(arr, less)
+	for i := len(arr) - 1; i > 0; i-- {
+		arr[0], arr[i] = arr[i], arr[0]
+		Heapify(arr, i, 0, less)
+	}
+}

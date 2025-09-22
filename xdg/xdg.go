@@ -39,6 +39,17 @@ func setENV(name, value string) string {
 func Get(base, suffix string) string {
 	return strings.Join(paths(base, suffix), string(os.PathListSeparator))
 }
+func GetRoot(base, suffix string, perm os.FileMode) (*os.Root, error) {
+	fs, err := os.OpenRoot(base)
+	if err != nil {
+		return nil, err
+	}
+	err = fs.Mkdir(Get(base, suffix), perm)
+	if err != nil {
+		return nil, err
+	}
+	return os.OpenRoot(Get(base, suffix))
+}
 func paths(base, suffix string) []string {
 	paths := strings.Split(os.ExpandEnv(base), string(os.PathListSeparator))
 	for i, path := range paths {

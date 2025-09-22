@@ -51,3 +51,21 @@ func TestAlign(t *testing.T) {
 }
 
 func ptr[T any](v T) *T { return &v }
+
+func TestHeapSort(t *testing.T) {
+	is := is.New(t)
+
+	arr := []int{9, 4, 3, 8, 10, 2, 5}
+	slice.HeapSort(arr, func(l, r int) bool { return l < r })
+
+	is.Equal(arr, []int{2, 3, 4, 5, 8, 9, 10})
+}
+
+func TestBuildHeap(t *testing.T) {
+	is := is.New(t)
+
+	arr := []int{1, 3, 5, 4, 6, 13, 10, 9, 8, 15, 17}
+	slice.BuildMaxHeap(arr, func(l, r int) bool { return l < r })
+
+	is.Equal(arr, []int{17, 15, 13, 9, 6, 5, 10, 4, 8, 3, 1})
+}
